@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Install electron-builder
+        run: npm install --no-save electron-builder
+
+      - name: Import Windows code signing cert
+        if: matrix.os == 'windows-latest' && env.WIN_CERT != ''
+        shell: bash
+        env:
+          WIN_CERT: ${{ secrets.WIN_CERTIFICATE_BASE64 }}
+          WIN_PASS: ${{ secrets.WIN_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$WIN_CERT" | base64 -d > cert.pfx
+          echo "CERT_PATH=$PWD/cert.pfx" >> "$GITHUB_ENV"
+          echo "CERT_PASS=$WIN_PASS" >> "$GITHUB_ENV"
+
+      - name: Import macOS code signing cert
+        if: matrix.os == 'macos-latest' && env.MAC_CERT != ''
+        shell: bash
+        env:
+          MAC_CERT: ${{ secrets.MAC_CERTIFICATE_BASE64 }}
+          MAC_PASS: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$MAC_CERT" | base64 -d > cert.p12
+          security create-keychain -p "" build.keychain
+          security import cert.p12 -k build.keychain -P "$MAC_PASS" -T /usr/bin/codesign
+          security list-keychains -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          echo "CSC_LINK=$PWD/cert.p12" >> "$GITHUB_ENV"
+          echo "CSC_KEY_PASSWORD=$MAC_PASS" >> "$GITHUB_ENV"
+
+      - name: Build and package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            npx electron-builder --win -p never
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            npx electron-builder --mac -p never
+          else
+            npx electron-builder --linux -p never
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openshare-${{ matrix.os }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.AppImage
+            dist/*.zip
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false

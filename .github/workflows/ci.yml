@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Install ESLint
+        run: npm install --no-save eslint@8
+
+      - name: Lint source
+        run: npm run lint
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Ensure secrets.json is not committed
+        shell: bash
+        run: |
+          if git ls-files --error-unmatch src/secrets.json >/dev/null 2>&1; then
+            echo "ERROR: src/secrets.json is tracked by git. Remove it before pushing."
+            exit 1
+          fi
+          echo "OK: no secrets tracked."

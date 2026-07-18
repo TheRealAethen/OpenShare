@@ -1,0 +1,21 @@
+{
+  "name": "openshare",
+  "version": "1.0.0",
+  "description": "Automatic multi-platform video uploader (TikTok, YouTube, Instagram) with per-profile galleries, daily quota limits and future scheduling.",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "lint": "eslint src --ext .js"
+  },
+  "author": "Fellipe Bittencourt",
+  "license": "SEE LICENSE IN LICENSE",
+  "private": true,
+  "dependencies": {
+    "electron": "^30.0.0",
+    "electron-store": "^8.1.0",
+    "googleapis": "^144.0.0",
+    "node-fetch": "^2.7.0",
+    "form-data": "^4.0.0"
+  }
+}

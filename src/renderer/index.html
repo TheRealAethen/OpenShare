@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'; script-src 'self'; media-src 'self' file:; img-src 'self' file: data: https:;" />
+  <title>OpenShare</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <nav id="sidebar">
+      <div class="brand">OpenShare</div>
+      <button class="nav-btn active" data-view="home">Home</button>
+      <button class="nav-btn" data-view="files">Files</button>
+      <button class="nav-btn" data-view="schedule">Schedule</button>
+      <button class="nav-btn" data-view="settings">Settings</button>
+    </nav>
+
+    <main id="content">
+      <!-- HOME -->
+      <section id="view-home" class="view">
+        <div class="page-head">
+          <h2>Welcome back</h2>
+          <button id="new-profile" class="primary">+ New Profile</button>
+        </div>
+        <p class="muted">Manage your upload profiles. Each profile keeps its own videos and uploads them to the connected platforms.</p>
+        <div id="profile-grid"></div>
+      </section>
+
+      <!-- FILES -->
+      <section id="view-files" class="view hidden">
+        <div class="page-head">
+          <h2>Files</h2>
+          <select id="files-profile-select"></select>
+          <button id="new-file" class="primary">+ New File</button>
+          <button id="run-daily" class="primary alt">Run Daily Upload</button>
+        </div>
+        <div id="dropzone">
+          <div class="dz-inner">
+            <div class="dz-icon">⬆</div>
+            <p>Drag &amp; drop videos here</p>
+            <label class="file-btn">or click to choose multiple<input id="file-input" type="file" multiple accept="video/*" hidden /></label>
+            <div class="sched-row">
+              <input id="schedule-input" type="datetime-local" title="Schedule upload for a future date" />
+              <span class="hint">Set a date to schedule these uploads</span>
+            </div>
+          </div>
+        </div>
+        <div id="progress-panel" class="hidden"></div>
+        <div id="file-grid"></div>
+      </section>
+
+      <!-- SCHEDULE -->
+      <section id="view-schedule" class="view hidden">
+        <div class="page-head"><h2>Scheduled</h2></div>
+        <p class="muted">Videos with a future date will upload automatically on their day (up to 30 per profile per day).</p>
+        <div id="schedule-grid"></div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section id="view-settings" class="view hidden">
+        <div class="page-head"><h2>Settings</h2></div>
+        <div class="settings-card">
+          <div class="setting-row">
+            <div>
+              <div class="setting-title">Dark Mode</div>
+              <div class="muted">Switch between light and dark theme.</div>
+            </div>
+            <button id="dark-toggle" class="switch">Off</button>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-title">Text &amp; UI Size</div>
+              <div class="muted">Scales fonts and buttons together for easier reading. <span id="scale-label">100%</span></div>
+            </div>
+            <input id="scale-slider" type="range" min="100" max="200" step="10" value="100" />
+            <button id="scale-reset" class="ghost" style="margin-top:8px;">Reset to 100%</button>
+          </div>
+          <hr />
+          <div class="setting-row" style="display:block;">
+            <div class="setting-title">Default Description (per profile)</div>
+            <div class="muted">Prefilled into every new file in this profile. Use for signatures or hashtags.</div>
+            <textarea id="default-desc" rows="3" style="width:100%;margin-top:8px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font-family:inherit;"></textarea>
+          </div>
+          <hr />
+          <div class="setting-row">
+            <div>
+              <div class="setting-title">Connect Platforms</div>
+              <div class="muted">Authenticate each platform for the selected profile.</div>
+            </div>
+          </div>
+          <div class="auth-row">
+            <select id="settings-profile-select"></select>
+          </div>
+          <div class="auth-buttons">
+            <button data-platform="tiktok">Connect TikTok</button>
+            <button data-platform="youtube">Connect YouTube</button>
+            <button data-platform="instagram">Connect Instagram</button>
+          </div>
+          <div id="quota-text" class="quota">Daily quota: 0 / 30</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <section id="log" class="hidden"></section>
+
+  <div id="modal" class="modal hidden">
+    <div class="modal-box">
+      <h3 id="modal-title">Enter value</h3>
+      <input id="modal-input" type="text" />
+      <div class="modal-actions">
+        <button id="modal-cancel" class="ghost">Cancel</button>
+        <button id="modal-ok" class="primary">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="cred-modal" class="modal hidden">
+    <div class="modal-box">
+      <h3 id="cred-title">Connect Platform</h3>
+      <p class="muted" id="cred-help"></p>
+      <label class="field-label">Client ID / Key</label>
+      <input id="cred-id" type="text" placeholder="Paste client id" />
+      <label class="field-label">Client Secret</label>
+      <input id="cred-secret" type="text" placeholder="Paste client secret" />
+      <div class="modal-actions">
+        <button id="cred-cancel" class="ghost">Cancel</button>
+        <button id="cred-save" class="primary">Save &amp; Continue</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

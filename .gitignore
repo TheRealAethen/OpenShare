@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Secrets / credentials (NEVER commit real credentials)
+src/secrets.json
+
+# Electron build output
+dist/
+out/
+build/
+*.app
+*.exe
+*.dmg
+*.snap
+
+# Electron store / runtime data
+*.config.json
+profiles/
+openshare-config.json
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Temp / transcoded media
+tmp/
+*.mp4.tmp
