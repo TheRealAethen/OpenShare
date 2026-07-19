@@ -98,14 +98,23 @@ function createWindow() {
   winRef.loadFile('src/renderer/index.html');
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  worker.start();
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+app.on('before-quit', () => {
+  worker.stop();
+});
+
 let uploadToPlatform;
 try { uploadToPlatform = require('./uploader').uploadToPlatform; } catch (e) { console.error('uploader load error:', e); }
+
+const { worker } = require('./publishing');
 
 ipcMain.handle('get-profiles', () => getProfiles());
 ipcMain.handle('create-profile', (_e, name) => {
@@ -251,7 +260,8 @@ ipcMain.handle('disconnect-platform', (_e, { profileId, platform }) => {
 });
 
 ipcMain.handle('run-daily', async (_e, profileId) => {
-  return runDailyForProfile(profileId);
+  worker.enqueue(() => runDailyForProfile(profileId));
+  return { enqueued: true };
 });
 
 async function runDailyForProfile(profileId) {
