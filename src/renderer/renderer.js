@@ -288,8 +288,9 @@ $('#run-daily').onclick = async () => {
   if (!currentProfile) return alert('Select a profile first.');
   log('Starting daily upload run...');
   const res = await api.runDaily(currentProfile);
-  if (res.done) log('Stopped: ' + res.reason);
-  else {
+  if (res.enqueued) log('Run queued. Uploads execute in the background.');
+  else if (res.done) log('Stopped: ' + res.reason);
+  else if (res.results) {
     log('Uploaded ' + res.uploaded + ' file(s).');
     if (res.skipped) log(res.skipped + ' file(s) skipped (already uploaded, scheduled later, or failed). Use "Re-upload" to retry failed ones.');
     res.results.forEach((r) => log('- ' + r.file + ': ' + JSON.stringify(r.perPlatform)));
