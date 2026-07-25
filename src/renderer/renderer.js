@@ -5,19 +5,19 @@
 const api = window.api;
 let currentProfile = null;
 let profilesCache = [];
-let appSettings = { darkMode: false, scale: 100 };
+let appSettings = { darkMode: false, scale: 100, devMode: false };
 
 window.addEventListener('error', (e) => {
   console.error('RENDERER ERROR:', e.message, e.filename, e.lineno);
   const el = document.getElementById('log');
-  if (el) { el.classList.remove('hidden'); el.textContent += '\n[ERROR] ' + e.message + ' @ ' + e.filename + ':' + e.lineno; }
+  if (appSettings.devMode && el) { el.textContent += '\n[ERROR] ' + e.message + ' @ ' + e.filename + ':' + e.lineno; }
 });
 console.log('=== OpenShare renderer v2 loaded ===');
 
 window.addEventListener('unhandledrejection', (e) => {
   console.error('RENDERER PROMISE REJECTION:', e.reason);
   const el = document.getElementById('log');
-  if (el) { el.classList.remove('hidden'); el.textContent += '\n[PROMISE ERROR] ' + (e.reason && e.reason.message ? e.reason.message : e.reason); }
+  if (appSettings.devMode && el) { el.textContent += '\n[PROMISE ERROR] ' + (e.reason && e.reason.message ? e.reason.message : e.reason); }
 });
 
 function ask(title, placeholder) {
@@ -47,13 +47,28 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 
 function log(msg) {
+  if (!appSettings.devMode) return;
   const el = $('#log');
-  el.classList.remove('hidden');
-  el.textContent += `\n${new Date().toLocaleTimeString()}  ${msg}`;
+  if (!el) return;
+  el.textContent += '\n' + new Date().toLocaleTimeString() + '  ' + msg;
   el.scrollTop = el.scrollHeight;
+  const body = $('#log-body');
+  if (body) body.classList.remove('collapsed');
+  const toggle = $('#log-toggle');
+  if (toggle) toggle.textContent = 'Hide Logs ▾';
 }
 
-/* ---------- settings: theme + scale ---------- */
+/* ---------- settings: theme + scale + dev mode ---------- */
+function updateLogVisibility() {
+  const panel = $('#log-panel');
+  if (!panel) return;
+  if (appSettings.devMode) {
+    panel.classList.remove('hidden');
+  } else {
+    panel.classList.add('hidden');
+  }
+}
+
 function applySettings() {
   const root = document.documentElement;
   root.style.fontSize = appSettings.scale + '%';
@@ -63,6 +78,9 @@ function applySettings() {
   if (t) { t.textContent = appSettings.darkMode ? 'On' : 'Off'; t.classList.toggle('on', appSettings.darkMode); }
   const lbl = $('#scale-label');
   if (lbl) lbl.textContent = appSettings.scale + '%';
+  const dev = $('#dev-toggle');
+  if (dev) { dev.textContent = appSettings.devMode ? 'On' : 'Off'; dev.classList.toggle('on', appSettings.devMode); }
+  updateLogVisibility();
 }
 
 async function loadSettings() {
@@ -185,7 +203,7 @@ async function renderFiles() {
       <div class="actions">
         <input type="datetime-local" class="sched" value="${f.scheduledAt ? f.scheduledAt.slice(0, 16) : ''}" />
         <button class="meta-btn" data-act="savemeta" data-file="${f.name}">Save Title/Desc</button>
-        <button class="reup-btn" data-act="reupload" data-file="${f.name}">Re-upload</button>
+        <button class="reup-btn" data-act="retry" data-file="${f.name}">Retry Upload</button>
         <button class="sched-btn" data-act="schedule" data-file="${f.name}">Set date</button>
         <button data-act="delete" data-file="${f.name}">Delete</button>
       </div>`;
@@ -207,10 +225,12 @@ async function renderFiles() {
       renderFiles(); loadProfiles();
     };
   });
-  grid.querySelectorAll('button[data-act="reupload"]').forEach((b) => {
+  grid.querySelectorAll('button[data-act="retry"]').forEach((b) => {
     b.onclick = async () => {
-      await api.resetFile({ profileId: currentProfile, fileName: b.dataset.file });
-      log('Reset "' + b.dataset.file + '" to pending — it will upload on next run.');
+      const fileName = b.dataset.file;
+      log('Resetting "' + fileName + '" and enqueuing retry...');
+      const res = await api.retryFile({ profileId: currentProfile, fileName });
+      if (res.enqueued) log('"' + fileName + '" reset to pending. Upload run queued.');
       renderFiles();
     };
   });
@@ -267,11 +287,20 @@ async function addFiles(fileList) {
   const files = Array.from(fileList).filter((f) => f.type.startsWith('video/') || /\.(mp4|mov|webm|mkv|avi)$/i.test(f.name));
   if (!files.length) return;
   for (const file of files) {
+    const fileTag = `[IMPORT] ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+    console.time(fileTag + ' → total import');
+    console.time(fileTag + ' → file.arrayBuffer() (renderer → RAM)');
     const buffer = await file.arrayBuffer();
+    console.timeEnd(fileTag + ' → file.arrayBuffer() (renderer → RAM)');
+    console.time(fileTag + ' → api.addFile IPC (renderer serialize + main write)');
     await api.addFile({ profileId: currentProfile, fileName: file.name, buffer, scheduledAt: sched });
+    console.timeEnd(fileTag + ' → api.addFile IPC (renderer serialize + main write)');
+    console.timeEnd(fileTag + ' → total import');
   }
   $('#schedule-input').value = '';
+  console.time('[IMPORT] → renderFiles() + loadProfiles() (UI re-render)');
   renderFiles(); loadProfiles();
+  console.timeEnd('[IMPORT] → renderFiles() + loadProfiles() (UI re-render)');
 }
 
 /* drag & drop zone */
@@ -292,7 +321,7 @@ $('#run-daily').onclick = async () => {
   else if (res.done) log('Stopped: ' + res.reason);
   else if (res.results) {
     log('Uploaded ' + res.uploaded + ' file(s).');
-    if (res.skipped) log(res.skipped + ' file(s) skipped (already uploaded, scheduled later, or failed). Use "Re-upload" to retry failed ones.');
+    if (res.skipped) log(res.skipped + ' file(s) skipped (already uploaded or scheduled later).');
     res.results.forEach((r) => log('- ' + r.file + ': ' + JSON.stringify(r.perPlatform)));
   }
   hideProgress();
@@ -342,6 +371,25 @@ if (window.api && window.api.onProgress) {
         const pctEl = fill.closest('.prog-row').querySelector('.pct');
         if (pctEl) pctEl.textContent = data.msg + '…';
       }
+    }
+  });
+}
+
+/* ---------- import progress ---------- */
+const importFill = $('#import-fill');
+const importLabel = $('#import-label');
+const importProg = $('#import-progress');
+if (window.api && window.api.onImportProgress) {
+  window.api.onImportProgress((data) => {
+    if (importProg) importProg.classList.remove('hidden');
+    if (importFill) importFill.style.width = data.pct + '%';
+    if (importLabel) importLabel.textContent = data.fileName + ' ' + data.pct + '%';
+    if (data.pct >= 100) {
+      setTimeout(() => {
+        if (importProg) importProg.classList.add('hidden');
+        if (importFill) importFill.style.width = '0';
+        if (importLabel) importLabel.textContent = '';
+      }, 1500);
     }
   });
 }
@@ -425,6 +473,20 @@ $('#scale-reset').onclick = async () => {
   const sl = $('#scale-slider');
   if (sl) sl.value = 100;
   await api.saveSettings(appSettings);
+};
+
+$('#dev-toggle').onclick = async () => {
+  appSettings.devMode = !appSettings.devMode;
+  applySettings();
+  await api.saveSettings(appSettings);
+};
+
+$('#log-toggle').onclick = () => {
+  const body = $('#log-body');
+  if (!body) return;
+  const toggle = $('#log-toggle');
+  body.classList.toggle('collapsed');
+  toggle.textContent = body.classList.contains('collapsed') ? 'Show Logs ▸' : 'Hide Logs ▾';
 };
 
 let descTimer = null;

@@ -89,6 +89,22 @@ gallery → optionally set a schedule date → click **Run Daily Upload**.
   Re-run the next day for the next batch.
 - Scheduled videos are skipped until their date arrives.
 
+## Engineering Operating System
+
+This repository runs as a **self-organizing engineering system**. Every change
+must trace `PR → Issue → Epic → Milestone → PRD`. Agents and contributors must
+read `AGENTS.md` (the constitution) before any action.
+
+- [AGENTS.md — Constitution](./AGENTS.md) ← **read first**
+- [PRD.md — Product Requirements](./PRD.md)
+- [ROADMAP.md — Milestones & Epics](./ROADMAP.md)
+- [Loop Engineering](./docs/LOOP_ENGINEERING.md)
+- [Definition of Done](./docs/DEFINITION_OF_DONE.md)
+- [Coding Standards](./docs/CODING_STANDARDS.md)
+- [Review Checklist](./docs/REVIEW_CHECKLIST.md)
+- [Agent Operating Procedures](./docs/AGENT_OPERATING_PROCEDURES.md)
+- [GitHub Issues Seed (Epics & backlog)](./docs/GITHUB_ISSUES_SEED.md)
+
 ## Documentation
 
 - [Architecture & System Design](./docs/ARCHITECTURE.md)

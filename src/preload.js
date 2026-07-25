@@ -14,6 +14,7 @@ const api = {
   setFileKids: (args) => ipcRenderer.invoke('set-file-kids', args),
   renameFile: (args) => ipcRenderer.invoke('rename-file', args),
   resetFile: (args) => ipcRenderer.invoke('reset-file', args),
+  retryFile: (args) => ipcRenderer.invoke('retry-file', args),
   getQuota: (profileId) => ipcRenderer.invoke('get-quota', profileId),
   authPlatform: (args) => ipcRenderer.invoke('auth-platform', args),
   disconnectPlatform: (args) => ipcRenderer.invoke('disconnect-platform', args),
@@ -23,6 +24,7 @@ const api = {
   getSecrets: () => ipcRenderer.invoke('get-secrets'),
   saveSecrets: (secrets) => ipcRenderer.invoke('save-secrets', secrets),
   onProgress: (cb) => ipcRenderer.on('upload-progress', (_e, data) => cb(data)),
+  onImportProgress: (cb) => ipcRenderer.on('import-progress', (_e, data) => cb(data)),
 };
 
 contextBridge.exposeInMainWorld('api', api);

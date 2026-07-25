@@ -18,6 +18,13 @@ Key design principles:
   OAuth tokens, so multiple brands/accounts can coexist.
 - **Resumable daily runs** — a per-profile daily quota is tracked in persistent
   store so runs can be safely re-invoked across days.
+- **Pluggable platform adapters** — upload logic is isolated behind a uniform
+  adapter interface so each platform can evolve independently and be tested in
+  isolation (see EPIC-003 / EPIC-004).
+
+> This document is the architectural source of truth referenced by `AGENTS.md` and
+> the GitHub Issues. Any change that alters these boundaries must update this file
+> in the **same PR** that introduces the change.
 
 ## 2. High-Level Architecture
 
@@ -38,12 +45,13 @@ Key design principles:
 │  - Window lifecycle & webPreferences                         │
 │  - Profile CRUD, file metadata, quota tracking (electron-store)
 │  - Schedules run-daily pipeline                              │
+│  - Orchestrates adapters via the Upload Engine               │
 └───────┬───────────────────┬───────────────────┬─────────────┘
         │                   │                   │
 ┌───────▼──────┐    ┌────────▼────────┐   ┌──────▼──────────┐
 │ auth.js      │    │ uploader.js      │   │ electron-store  │
-│ OAuth 2.0    │    │ TikTok/YouTube/  │   │ config + quota  │
-│ flows        │    │ Instagram upload │   │ + profiles      │
+│ OAuth 2.0    │    │ adapter dispatch │   │ config + quota  │
+│ flows        │    │ + platform impls  │   │ + profiles      │
 └───────┬──────┘    └────────┬────────┘   └─────────────────┘
         │                    │
         ▼                    ▼
@@ -55,7 +63,8 @@ Key design principles:
 
 ### 3.1 Main Process (`src/main.js`)
 - Creates the `BrowserWindow` with `contextIsolation: true` and
-  `nodeIntegration: false`.
+  `nodeIntegration: false`. **These two settings are immutable invariants**
+  (see `CONTRIBUTING.md` and `AGENTS.md` §2).
 - Registers IPC handlers for profiles, files, quota, settings, secrets, auth,
   and the daily run.
 - Persists configuration and per-profile upload state in an
@@ -69,19 +78,37 @@ Key design principles:
 - Exchanges the authorization code for access/refresh tokens.
 - Secrets are loaded from / saved to `src/secrets.json` (git-ignored).
 
-### 3.3 Uploader (`src/uploader.js`)
+### 3.3 Upload Engine & Platform Adapter Framework (`src/uploader.js`)
+The uploader is the boundary between orchestration and platform specifics.
+
 - `uploadToPlatform(platform, tokens, filePath, opts)` dispatches to the correct
-  implementation:
+  adapter implementation:
   - **TikTok** — file init → PUT upload → publish.
   - **YouTube** — optional ffmpeg transcode to H.264/AAC MP4 → resumable
     `videos.insert` via googleapis.
   - **Instagram** — Graph API media creation (REELS) → publish.
 - Reports per-platform status through an `onStatus` callback used for progress.
+- Adapters are **pluggable**: each platform implements a common contract
+  (`authenticate`, `upload`, `status`). New platforms are added by registering a
+  new adapter, not by branching on a string inside orchestration code.
+- Failure classification (transient vs permanent) and retry/backoff live here so
+  the daily-run pipeline can decide whether to mark a file `failed` or retry.
 
 ### 3.4 Renderer (`src/renderer/*`)
 - Pure presentation + interaction. Talks only via `window.api`.
 - Renders profile grid, file cards (with title/desc/privacy/platform toggles),
   drag-and-drop gallery, scheduling UI, and a live progress panel.
+
+### 3.5 Background Worker (`src/publishing/worker.js`)
+- Generic FIFO job executor built on `EventEmitter`.
+- Lifecycle: `start()` → `enqueue(job)` → sequential execution → `stop()`.
+- Emits `started`, `idle`, `jobStarted`, `jobCompleted`, `jobFailed`, `stopped`.
+- Maintains an ephemeral `_runtimeState` Map for in-memory state that is
+  **never** persisted. Cleared on `stop()`.
+- On app startup (`main.js`), `resetStaleUploadingStates()` scans every
+  profile's `meta.json` and resets any record with `status: "uploading"` back to
+  `status: "pending"`. This prevents files from being permanently orphaned after
+  a crash.
 
 ## 4. Data Model
 
@@ -100,11 +127,15 @@ Key design principles:
 ```
 
 ### File metadata (`meta.json` per profile folder)
+Only terminal or pending states are persisted. Runtime states (`uploading`,
+`progress`, `retrying`) live in the Worker's in-memory `_runtimeState` and are
+**never** written to `meta.json`. On startup, any stale `uploading` record found
+in `meta.json` is automatically reset to `pending` (see §3.5).
 ```json
 {
   "clip.mp4": {
     "scheduledAt": "2026-07-20T10:00:00.000Z",
-    "status": "pending | uploading | uploaded | failed",
+    "status": "pending | uploaded | failed",
     "uploadedAt": "2026-07-18T12:00:00.000Z",
     "lastError": null,
     "platforms": ["tiktok", "youtube", "instagram"],
@@ -128,12 +159,19 @@ Key design principles:
 3. List files; select `pending` files whose `scheduledAt` (if any) is now or past.
 4. Slice to remaining quota.
 5. For each file, for each selected platform:
-   - Skip if not authenticated (`not-authenticated`).
-   - Upload; record per-platform result.
-6. Mark file `uploaded` only if **all** selected platforms succeeded,
-   otherwise `failed` with error detail.
-7. Increment quota by number of fully uploaded files.
-8. Emit progress events (`start`, `status`, `file`, `overall`) to the renderer.
+    - Skip if not authenticated (`not-authenticated`).
+    - Upload via the platform adapter; record per-platform result.
+6. During execution the file's runtime state (`uploading`) is tracked in
+   the Worker's in-memory `_runtimeState` — it is **not** persisted to
+   `meta.json`. Only terminal states (`uploaded`, `failed`) are written to
+   `meta.json`.
+8. Mark file `uploaded` only if **all** selected platforms succeeded,
+   otherwise `failed` with error detail. The runtime state is then removed
+   from worker memory.
+9. Increment quota by number of fully uploaded files.
+10. Emit progress events (`start`, `status`, `file`, `overall`) to the renderer.
+11. **Idempotency:** a re-run never re-publishes a file already `uploaded`
+    (resumable; see NFR-004 in `PRD.md`).
 
 ## 6. Security Design
 
@@ -143,6 +181,8 @@ Key design principles:
 - **CSP:** `index.html` ships a Content-Security-Policy restricting sources.
 - **State validation:** OAuth `state` is randomized and verified.
 - **File safety:** `delete-file` retries on `EBUSY`; renames sanitize filenames.
+- **Immutable invariants:** `contextIsolation` and `nodeIntegration` are never
+  disabled. CI and `AGENTS.md` enforce this as a hard gate.
 
 ## 7. External Dependencies
 
@@ -154,3 +194,16 @@ Key design principles:
 | `node-fetch`     | HTTP for TikTok/Instagram APIs            |
 | `form-data`      | Multipart uploads                         |
 | `ffmpeg` (system)| Optional transcode for YouTube            |
+
+## 8. Module Boundaries (for agents)
+
+| Concern                | Allowed files                     | Forbidden from        |
+|------------------------|-----------------------------------|-----------------------|
+| Secrets / tokens       | `src/auth.js`, `src/secrets.json` | `renderer/*`, preload |
+| Platform upload logic  | `src/uploader.js` (+ adapters)    | `main.js` internals   |
+| IPC surface            | `src/main.js` + `src/preload.js`  | `renderer/*` direct   |
+| Persistence            | `electron-store` in `main.js`     | renderer / adapters   |
+| UI                     | `src/renderer/*`                   | `main.js` orchestration |
+
+When an issue implies crossing these boundaries, raise it on the issue before
+implementing (see `AGENTS.md` §2 — no unilateral architectural decisions).

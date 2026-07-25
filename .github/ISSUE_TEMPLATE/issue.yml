@@ -1,0 +1,85 @@
+name: Issue
+description: Standard work item. Must trace to an Epic, Milestone, and the PRD.
+title: "[OPN-###] Short summary"
+labels: ["triage"]
+body:
+  - type: dropdown
+    id: epic
+    attributes:
+      label: Epic
+      description: Which epic does this belong to? (see ROADMAP.md)
+      options:
+        - EPIC-001 Architecture & Foundation
+        - EPIC-002 Storage & Configuration
+        - EPIC-003 Platform Adapter Framework
+        - EPIC-004 Upload Engine
+        - EPIC-005 Scheduler
+        - EPIC-006 Asset Library
+        - EPIC-007 Workspace Management
+        - EPIC-008 Analytics
+        - EPIC-009 AI Features
+        - EPIC-010 Release & Distribution
+    validations:
+      required: true
+
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Milestone
+      options:
+        - MS-001 Foundations
+        - MS-002 Connectivity
+        - MS-003 Automation
+        - MS-004 Scale & Intelligence
+        - MS-005 Ship It
+    validations:
+      required: true
+
+  - type: input
+    id: prd
+    attributes:
+      label: PRD reference
+      description: Which FR-### / NFR-### from PRD.md does this satisfy?
+      placeholder: "FR-005, NFR-004"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Motivation
+      description: Why is this work needed? Link any related issues.
+    validations:
+      required: true
+
+  - type: textarea
+    id: ac
+    attributes:
+      label: Acceptance Criteria
+      description: Concrete, checkable conditions for Done.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: deps
+    attributes:
+      label: Dependencies
+      description: Issue IDs this depends on (blocked until resolved).
+      placeholder: "Depends on OPN-12, OPN-15"
+
+  - type: textarea
+    id: testing
+    attributes:
+      label: Testing & Verification
+      description: How will this be verified? Unit tests? Manual steps?
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollout
+    attributes:
+      label: Rollout / Risks
+      description: Any migration, breaking change, or risk notes.
