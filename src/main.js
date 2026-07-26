@@ -32,7 +32,13 @@ function createWindow() {
 
 app.whenReady().then(() => {
   worker.start();
-  engine.init(worker);
+  engine.init(worker, {
+    notifyProgress: (data) => {
+      console.log('[DBG] send progress:', JSON.stringify(data));
+      if (winRef && winRef.webContents) winRef.webContents.send('upload-progress', data);
+    },
+    schedulerInterval: 60000,
+  });
   createWindow();
 });
 

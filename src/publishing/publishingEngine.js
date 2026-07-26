@@ -17,10 +17,52 @@ let uploadToPlatform;
 try { uploadToPlatform = require('../uploader').uploadToPlatform; } catch (e) { console.error('uploader load error:', e); }
 
 let _worker = null;
+let _notifyProgress = null;
+let _schedulerTimer = null;
 
-function init(worker) {
+function init(worker, opts) {
   _worker = worker;
+  _notifyProgress = (opts && opts.notifyProgress) || null;
   resetStaleUploadingStates();
+  if (!opts || opts.schedulerInterval !== false) {
+    startScheduler((opts && opts.schedulerInterval) || 60000);
+  }
+}
+
+function startScheduler(intervalMs) {
+  stopScheduler();
+  console.log('[scheduler] Starting tick every ' + intervalMs + 'ms');
+  _schedulerTimer = setInterval(() => { tick(); }, intervalMs);
+  tick();
+}
+
+function stopScheduler() {
+  if (_schedulerTimer) {
+    clearInterval(_schedulerTimer);
+    _schedulerTimer = null;
+    console.log('[scheduler] Stopped');
+  }
+}
+
+async function tick() {
+  const profiles = getProfiles();
+  if (!profiles.length) return;
+  for (const profile of profiles) {
+    if (!_worker) continue;
+    const key = 'scheduler:tick:' + profile.id;
+    if (_worker.getRuntimeState(key)) continue;
+    _worker.setRuntimeState(key, true);
+    try {
+      const result = await runDailyForProfile(profile.id, _notifyProgress);
+      if (result.uploaded > 0) {
+        console.log('[scheduler] Profile ' + profile.id + ' uploaded ' + result.uploaded + ' file(s).');
+      }
+    } catch (err) {
+      console.error('[scheduler] Error for profile ' + profile.id + ':', err.message);
+    } finally {
+      _worker.deleteRuntimeState(key);
+    }
+  }
 }
 
 function resetStaleUploadingStates() {
@@ -206,4 +248,4 @@ async function runDailyForProfile(profileId, notifyProgress) {
   return { done: false, uploaded, results, quota: getQuota(profileId), skipped };
 }
 
-module.exports = { init, resetStaleUploadingStates, runDailyForProfile };
+module.exports = { init, resetStaleUploadingStates, runDailyForProfile, startScheduler, stopScheduler, tick };
