@@ -1,4 +1,4 @@
-const { shell, BrowserWindow } = require('electron');
+const { shell } = require('electron');
 const http = require('node:http');
 const fetch = require('node-fetch');
 const { URL } = require('node:url');
@@ -52,44 +52,46 @@ function killExistingServer() {
 }
 
 function startServer() {
-  return new Promise(async (resolve, reject) => {
-    await killExistingServer();
+  return new Promise((resolve, reject) => {
+    (async () => {
+      await killExistingServer();
 
-    const server = http.createServer((req, res) => {
-      const url = new URL(req.url, `http://localhost:${REDIRECT_PORT}`);
-      if (url.pathname === '/callback') {
-        res.end('<html><body>Authentication complete. You may close this window.</body></html>');
-        const params = url.searchParams;
+      const server = http.createServer((req, res) => {
+        const url = new URL(req.url, `http://localhost:${REDIRECT_PORT}`);
+        if (url.pathname === '/callback') {
+          res.end('<html><body>Authentication complete. You may close this window.</body></html>');
+          const params = url.searchParams;
+          activeServer = null;
+          server.close();
+          resolve(Object.fromEntries(params.entries()));
+        }
+      });
+
+      activeServer = server;
+
+      server.on('error', (err) => {
         activeServer = null;
-        server.close();
-        resolve(Object.fromEntries(params.entries()));
-      }
-    });
+        if (err.code === 'EADDRINUSE') {
+          reject(new Error(`Port ${REDIRECT_PORT} is busy. Close any other OpenShare windows or browser tabs using that port, then try again.`));
+        } else {
+          reject(err);
+        }
+      });
 
-    activeServer = server;
+      server.listen(REDIRECT_PORT);
 
-    server.on('error', (err) => {
-      activeServer = null;
-      if (err.code === 'EADDRINUSE') {
-        reject(new Error(`Port ${REDIRECT_PORT} is busy. Close any other OpenShare windows or browser tabs using that port, then try again.`));
-      } else {
-        reject(err);
-      }
-    });
-
-    server.listen(REDIRECT_PORT);
-
-    setTimeout(() => {
-      if (activeServer === server) {
-        activeServer = null;
-        server.close();
-        reject(new Error('Auth timed out after 2 minutes. No response was received from the platform.'));
-      }
-    }, 120000);
+      setTimeout(() => {
+        if (activeServer === server) {
+          activeServer = null;
+          server.close();
+          reject(new Error('Auth timed out after 2 minutes. No response was received from the platform.'));
+        }
+      }, 120000);
+    })();
   });
 }
 
-async function authenticate(platform, win) {
+async function authenticate(platform, _win) {
   const secrets = loadSecrets();
   const cfg = secrets[platform];
   const def = CLIENTS[platform];

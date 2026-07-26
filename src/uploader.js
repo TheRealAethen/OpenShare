@@ -2,7 +2,6 @@ const fs = require('node:fs');
 const { execFile } = require('node:child_process');
 const fetch = require('node-fetch');
 const { google } = require('googleapis');
-const FormData = require('form-data');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -136,7 +135,7 @@ async function uploadToYouTube(tokens, filePath, opts = {}) {
     throw uploadErr;
   } finally {
     if (transcoded && uploadPath !== filePath) {
-      try { fs.unlinkSync(uploadPath); } catch {}
+      try { fs.unlinkSync(uploadPath); } catch { /* ignore */ }
     }
   }
 }
