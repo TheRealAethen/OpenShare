@@ -1,4 +1,4 @@
-const { shell, BrowserWindow } = require('electron');
+const { app, shell } = require('electron');
 const http = require('node:http');
 const fetch = require('node-fetch');
 const { URL } = require('node:url');
@@ -27,18 +27,25 @@ const CLIENTS = {
 const fs = require('node:fs');
 const path = require('node:path');
 
+function secretsPath() {
+  if (app.isPackaged) {
+    return path.join(app.getPath('userData'), 'secrets.json');
+  }
+  return path.join(__dirname, 'secrets.json');
+}
+
 function loadSecrets() {
-  const p = path.join(__dirname, 'secrets.json');
   try {
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
+    return JSON.parse(fs.readFileSync(secretsPath(), 'utf8'));
   } catch {
     return {};
   }
 }
 
 function saveSecrets(secrets) {
-  const p = path.join(__dirname, 'secrets.json');
-  fs.writeFileSync(p, JSON.stringify(secrets, null, 2));
+  const dir = path.dirname(secretsPath());
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(secretsPath(), JSON.stringify(secrets, null, 2));
 }
 
 let activeServer = null;
@@ -52,49 +59,51 @@ function killExistingServer() {
 }
 
 function startServer() {
-  return new Promise(async (resolve, reject) => {
-    await killExistingServer();
+  return new Promise((resolve, reject) => {
+    (async () => {
+      await killExistingServer();
 
-    const server = http.createServer((req, res) => {
-      const url = new URL(req.url, `http://localhost:${REDIRECT_PORT}`);
-      if (url.pathname === '/callback') {
-        res.end('<html><body>Authentication complete. You may close this window.</body></html>');
-        const params = url.searchParams;
+      const server = http.createServer((req, res) => {
+        const url = new URL(req.url, `http://localhost:${REDIRECT_PORT}`);
+        if (url.pathname === '/callback') {
+          res.end('<html><body>Authentication complete. You may close this window.</body></html>');
+          const params = url.searchParams;
+          activeServer = null;
+          server.close();
+          resolve(Object.fromEntries(params.entries()));
+        }
+      });
+
+      activeServer = server;
+
+      server.on('error', (err) => {
         activeServer = null;
-        server.close();
-        resolve(Object.fromEntries(params.entries()));
-      }
-    });
+        if (err.code === 'EADDRINUSE') {
+          reject(new Error(`Port ${REDIRECT_PORT} is busy. Close any other OpenShare windows or browser tabs using that port, then try again.`));
+        } else {
+          reject(err);
+        }
+      });
 
-    activeServer = server;
+      server.listen(REDIRECT_PORT);
 
-    server.on('error', (err) => {
-      activeServer = null;
-      if (err.code === 'EADDRINUSE') {
-        reject(new Error(`Port ${REDIRECT_PORT} is busy. Close any other OpenShare windows or browser tabs using that port, then try again.`));
-      } else {
-        reject(err);
-      }
-    });
-
-    server.listen(REDIRECT_PORT);
-
-    setTimeout(() => {
-      if (activeServer === server) {
-        activeServer = null;
-        server.close();
-        reject(new Error('Auth timed out after 2 minutes. No response was received from the platform.'));
-      }
-    }, 120000);
+      setTimeout(() => {
+        if (activeServer === server) {
+          activeServer = null;
+          server.close();
+          reject(new Error('Auth timed out after 2 minutes. No response was received from the platform.'));
+        }
+      }, 120000);
+    })();
   });
 }
 
-async function authenticate(platform, win) {
+async function authenticate(platform, _win) {
   const secrets = loadSecrets();
   const cfg = secrets[platform];
   const def = CLIENTS[platform];
   if (!cfg || !cfg.clientId) {
-    throw new Error(`Missing clientId for ${platform}. Add it to src/secrets.json`);
+    throw new Error(`Missing clientId for ${platform}. Add it to secrets.json (${secretsPath()})`);
   }
 
   const server = startServer();

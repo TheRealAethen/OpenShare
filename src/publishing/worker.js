@@ -61,7 +61,8 @@ class Worker extends EventEmitter {
           console.log("[DBG-worker] job DONE");
           this.emit("jobCompleted", job);
         } catch (err) {
-          console.log("[DBG-worker] job FAILED:", err && err.message);
+          console.log("[DBG-worker] job FAILED:", err && (err.message || err));
+          if (err && err.stack) console.log("[DBG-worker] stack:", err.stack);
           this.emit("jobFailed", job, err);
         } finally {
           this.running = false;
