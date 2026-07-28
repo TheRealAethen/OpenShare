@@ -1,87 +1,19 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
-const Store = require('electron-store');
 
-const store = new Store({ name: 'openshare-config' });
+const {
+  store,
+  profileDir,
+  getProfiles,
+  saveProfiles,
+  getProfile,
+  getQuota,
+  listFiles,
+  setFileMeta,
+} = require('./publishing/storage');
 
-const DAILY_LIMIT = 30;
-const PLATFORMS = ['tiktok', 'youtube', 'instagram'];
-
-const storageRoot = path.join(app.getPath('userData'), 'profiles');
-
-function ensureDir(p) {
-  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
-}
-
-function profileDir(profileId) {
-  const d = path.join(storageRoot, profileId);
-  ensureDir(d);
-  return d;
-}
-
-function getProfiles() {
-  return store.get('profiles', []);
-}
-
-function saveProfiles(profiles) {
-  store.set('profiles', profiles);
-}
-
-function getProfile(id) {
-  return getProfiles().find((p) => p.id === id);
-}
-
-function todayKey() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function getQuota(profileId) {
-  const q = store.get(`quota.${profileId}`, { date: todayKey(), used: 0 });
-  if (q.date !== todayKey()) {
-    q.date = todayKey();
-    q.used = 0;
-    store.set(`quota.${profileId}`, q);
-  }
-  return q;
-}
-
-function incrementQuota(profileId, count) {
-  const q = getQuota(profileId);
-  q.used += count;
-  store.set(`quota.${profileId}`, q);
-  return q;
-}
-
-function listFiles(profileId) {
-  const dir = profileDir(profileId);
-  const metaPath = path.join(dir, 'meta.json');
-  let meta = {};
-  if (fs.existsSync(metaPath)) meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-  const files = fs.readdirSync(dir).filter((f) => f !== 'meta.json' && !f.endsWith('.json'));
-  return files.map((f) => ({
-    name: f,
-    path: path.join(dir, f),
-    scheduledAt: meta[f]?.scheduledAt || null,
-    status: meta[f]?.status || 'pending',
-    uploadedAt: meta[f]?.uploadedAt || null,
-    lastError: meta[f]?.lastError || null,
-    platforms: meta[f]?.platforms || ['tiktok', 'youtube', 'instagram'],
-    privacy: meta[f]?.privacy || 'private',
-    madeForKids: meta[f]?.madeForKids || false,
-    title: meta[f]?.title || null,
-    desc: meta[f]?.desc || null,
-  }));
-}
-
-function setFileMeta(profileId, fileName, patch) {
-  const dir = profileDir(profileId);
-  const metaPath = path.join(dir, 'meta.json');
-  let meta = {};
-  if (fs.existsSync(metaPath)) meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-  meta[fileName] = { ...(meta[fileName] || {}), ...patch };
-  fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
-}
+const { worker, engine } = require('./publishing');
 
 let winRef = null;
 
@@ -100,6 +32,13 @@ function createWindow() {
 
 app.whenReady().then(() => {
   worker.start();
+  engine.init(worker, {
+    notifyProgress: (data) => {
+      console.log('[DBG] send progress:', JSON.stringify(data));
+      if (winRef && winRef.webContents) winRef.webContents.send('upload-progress', data);
+    },
+    schedulerInterval: 60000,
+  });
   createWindow();
 });
 
@@ -111,10 +50,7 @@ app.on('before-quit', () => {
   worker.stop();
 });
 
-let uploadToPlatform;
-try { uploadToPlatform = require('./uploader').uploadToPlatform; } catch (e) { console.error('uploader load error:', e); }
-
-const { worker } = require('./publishing');
+/* ---------- IPC handlers ---------- */
 
 ipcMain.handle('get-profiles', () => getProfiles());
 ipcMain.handle('create-profile', (_e, name) => {
@@ -141,13 +77,60 @@ ipcMain.handle('delete-profile', (_e, id) => {
 
 ipcMain.handle('list-files', (_e, profileId) => listFiles(profileId));
 ipcMain.handle('add-file', async (_e, { profileId, fileName, buffer, scheduledAt }) => {
+  const bufSizeMB = (buffer.byteLength / 1024 / 1024).toFixed(2);
+  const tag = `[ADD-FILE] ${fileName} (${bufSizeMB} MB)`;
+  console.time(tag + ' → total handler');
+  console.time(tag + ' → profileDir() + mkdirSync');
   const dir = profileDir(profileId);
+  console.timeEnd(tag + ' → profileDir() + mkdirSync');
   const dest = path.join(dir, fileName);
-  fs.writeFileSync(dest, Buffer.from(buffer));
+  console.time(tag + ' → async write stream (video bytes to disk)');
+  const buf = Buffer.from(buffer);
+  const CHUNK_SIZE = 1024 * 1024;
+  const ws = fs.createWriteStream(dest);
+  try {
+    await new Promise((resolve, reject) => {
+      ws.on("error", reject);
+      ws.on("finish", resolve);
+      let offset = 0;
+      function writeNext() {
+        let drained = true;
+        while (drained && offset < buf.length) {
+          const end = Math.min(offset + CHUNK_SIZE, buf.length);
+          drained = ws.write(buf.slice(offset, end));
+          offset = end;
+          if (winRef && winRef.webContents) {
+            winRef.webContents.send("import-progress", {
+              fileName,
+              pct: Math.round((offset / buf.length) * 100),
+            });
+          }
+        }
+        if (offset >= buf.length) {
+          ws.end();
+        } else {
+          ws.once("drain", writeNext);
+        }
+      }
+      writeNext();
+    });
+  } catch (err) {
+    await fs.promises.unlink(dest).catch(() => {});
+    throw err;
+  }
+  console.timeEnd(tag + ' → async write stream (video bytes to disk)');
+  console.time(tag + ' → getProfile (electron-store)');
   const profile = getProfile(profileId);
+  console.timeEnd(tag + ' → getProfile (electron-store)');
   const defaultDesc = (profile && profile.defaultDesc) || '';
+  console.time(tag + ' → setFileMeta (read+write meta.json)');
   setFileMeta(profileId, fileName, { scheduledAt: scheduledAt || null, status: 'pending', desc: defaultDesc });
-  return listFiles(profileId);
+  console.timeEnd(tag + ' → setFileMeta (read+write meta.json)');
+  console.time(tag + ' → listFiles (fs.readdirSync + read meta.json)');
+  const result = listFiles(profileId);
+  console.timeEnd(tag + ' → listFiles (fs.readdirSync + read meta.json)');
+  console.timeEnd(tag + ' → total handler');
+  return result;
 });
 ipcMain.handle('schedule-file', (_e, { profileId, fileName, scheduledAt }) => {
   setFileMeta(profileId, fileName, { scheduledAt });
@@ -168,7 +151,12 @@ ipcMain.handle('delete-file', async (_e, { profileId, fileName }) => {
       throw err;
     }
   }
-  setFileMeta(profileId, fileName, {});
+  const metaPath = path.join(dir, 'meta.json');
+  if (fs.existsSync(metaPath)) {
+    let meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    delete meta[fileName];
+    fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+  }
   return listFiles(profileId);
 });
 ipcMain.handle('set-file-platforms', (_e, { profileId, fileName, platforms }) => {
@@ -186,6 +174,12 @@ ipcMain.handle('set-file-kids', (_e, { profileId, fileName, madeForKids }) => {
 ipcMain.handle('reset-file', (_e, { profileId, fileName }) => {
   setFileMeta(profileId, fileName, { status: 'pending', uploadedAt: null, lastError: null, platformResults: null });
   return listFiles(profileId);
+});
+ipcMain.handle('retry-file', async (_e, { profileId, fileName }) => {
+  setFileMeta(profileId, fileName, { status: 'pending', uploadedAt: null, lastError: null, platformResults: null });
+  const send = (data) => { console.log('[DBG] send progress:', JSON.stringify(data)); if (winRef && winRef.webContents) winRef.webContents.send('upload-progress', data); };
+  worker.enqueue(() => engine.runDailyForProfile(profileId, send));
+  return { enqueued: true };
 });
 ipcMain.handle('rename-file', async (_e, { profileId, fileName, newName, title, desc }) => {
   const dir = profileDir(profileId);
@@ -208,12 +202,20 @@ ipcMain.handle('rename-file', async (_e, { profileId, fileName, newName, title, 
   if (title !== undefined) patch.title = title || null;
   if (desc !== undefined) patch.desc = desc || null;
   setFileMeta(profileId, finalName, patch);
+  if (finalName !== fileName) {
+    const metaPath = path.join(dir, 'meta.json');
+    if (fs.existsSync(metaPath)) {
+      let meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+      delete meta[fileName];
+      fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+    }
+  }
   return listFiles(profileId);
 });
 ipcMain.handle('get-quota', (_e, profileId) => getQuota(profileId));
 
 function getSettings() {
-  return store.get('settings', { darkMode: false, scale: 100 });
+  return store.get('settings', { darkMode: false, scale: 100, devMode: false });
 }
 ipcMain.handle('get-settings', () => getSettings());
 ipcMain.handle('save-settings', (_e, settings) => {
@@ -260,63 +262,8 @@ ipcMain.handle('disconnect-platform', (_e, { profileId, platform }) => {
 });
 
 ipcMain.handle('run-daily', async (_e, profileId) => {
-  worker.enqueue(() => runDailyForProfile(profileId));
+  console.log('[DBG] run-daily handler: enqueueing job for', profileId);
+  const send = (data) => { console.log('[DBG] send progress:', JSON.stringify(data)); if (winRef && winRef.webContents) winRef.webContents.send('upload-progress', data); };
+  worker.enqueue(() => engine.runDailyForProfile(profileId, send));
   return { enqueued: true };
 });
-
-async function runDailyForProfile(profileId) {
-  const quota = getQuota(profileId);
-  const remaining = DAILY_LIMIT - quota.used;
-  if (remaining <= 0) return { done: true, reason: 'limit-reached', uploaded: 0 };
-
-  const now = Date.now();
-  const all = listFiles(profileId);
-  const due = all
-    .filter((f) => f.status === 'pending' && (!f.scheduledAt || new Date(f.scheduledAt).getTime() <= now))
-    .slice(0, remaining);
-
-  const skipped = all.length - due.length;
-  if (skipped > 0) console.log(`[run-daily] ${skipped} file(s) skipped (already uploaded, scheduled for later, or failed). ${due.length} due now.`);
-
-  const total = due.length;
-  let uploaded = 0;
-  const results = [];
-  const send = (data) => { if (winRef && winRef.webContents) winRef.webContents.send('upload-progress', data); };
-
-  if (total > 0) send({ type: 'start', files: due.map((f) => f.name) });
-
-  for (let i = 0; i < due.length; i++) {
-    const file = due[i];
-    setFileMeta(profileId, file.name, { status: 'uploading' });
-    const targetPlatforms = (file.platforms && file.platforms.length) ? file.platforms : PLATFORMS;
-    const perPlatform = {};
-    for (let p = 0; p < targetPlatforms.length; p++) {
-      const platform = targetPlatforms[p];
-      try {
-        const profile = getProfile(profileId);
-        const tokens = profile.auth[platform];
-        if (!tokens) { perPlatform[platform] = { ok: false, error: 'not-authenticated' }; continue; }
-        const res = await uploadToPlatform(platform, tokens, file.path, { privacy: file.privacy || 'private', title: file.title || file.name, desc: file.desc || '', madeForKids: file.madeForKids || false, onStatus: (msg) => send({ type: 'status', file: file.name, platform, msg }) });
-        perPlatform[platform] = { ok: true, id: res.id };
-      } catch (err) {
-        perPlatform[platform] = { ok: false, error: err.message };
-      }
-      const filePct = Math.round(((p + 1) / targetPlatforms.length) * 100);
-      send({ type: 'file', file: file.name, pct: filePct });
-    }
-    const allOk = targetPlatforms.every((p) => perPlatform[p]?.ok);
-    setFileMeta(profileId, file.name, {
-      status: allOk ? 'uploaded' : 'failed',
-      uploadedAt: allOk ? new Date().toISOString() : null,
-      lastError: allOk ? null : JSON.stringify(perPlatform),
-      platformResults: perPlatform,
-    });
-    if (allOk) uploaded++;
-    else send({ type: 'file', file: file.name, pct: 100, failed: true });
-    results.push({ file: file.name, perPlatform });
-    send({ type: 'overall', pct: Math.round(((i + 1) / total) * 100) });
-  }
-
-  incrementQuota(profileId, uploaded);
-  return { done: false, uploaded, results, quota: getQuota(profileId), skipped };
-}

@@ -2,7 +2,6 @@ const fs = require('node:fs');
 const { execFile } = require('node:child_process');
 const fetch = require('node-fetch');
 const { google } = require('googleapis');
-const FormData = require('form-data');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -73,7 +72,7 @@ async function uploadToTikTok(tokens, filePath, opts = {}) {
 async function uploadToYouTube(tokens, filePath, opts = {}) {
   const privacy = opts.privacy || 'private';
   const madeForKids = opts.madeForKids || false;
-  const oauth2 = new google.auth.OAuth2();
+  const oauth2 = new google.auth.OAuth2(opts.clientId, opts.clientSecret);
   oauth2.setCredentials({ access_token: tokens.access_token, refresh_token: tokens.refresh_token });
   const yt = google.youtube({ version: 'v3', auth: oauth2 });
 
@@ -110,13 +109,33 @@ async function uploadToYouTube(tokens, filePath, opts = {}) {
         },
       }
     );
+    const creds = oauth2.credentials;
+    if (creds.access_token !== tokens.access_token) {
+      return {
+        id: res.data.id,
+        updatedTokens: {
+          access_token: creds.access_token,
+          refresh_token: creds.refresh_token || tokens.refresh_token,
+        },
+      };
+    }
     return { id: res.data.id };
   } catch (err) {
-    const details = err.errors ? JSON.stringify(err.errors) : (err.response && err.response.data ? JSON.stringify(err.response.data) : err.message);
-    throw new Error('YouTube upload failed: ' + details);
+    const errors = err.errors || [];
+    const isAuth = errors.some(function (e) { return e.reason === 'authError' || e.reason === 'expired'; }) ||
+      (err.message && (err.message.indexOf('Invalid Credentials') !== -1 || err.message.indexOf('invalid_grant') !== -1));
+    const detail = errors.length
+      ? errors.map(function (e) { return e.message || e.reason; }).join('; ')
+      : (err.response && err.response.data ? JSON.stringify(err.response.data) : err.message);
+    const msg = isAuth
+      ? 'YouTube auth expired \u2014 reconnect required (' + detail + ')'
+      : 'YouTube upload failed: ' + detail;
+    const uploadErr = new Error(msg);
+    if (isAuth) uploadErr.authError = true;
+    throw uploadErr;
   } finally {
     if (transcoded && uploadPath !== filePath) {
-      try { fs.unlinkSync(uploadPath); } catch {}
+      try { fs.unlinkSync(uploadPath); } catch { /* ignore */ }
     }
   }
 }

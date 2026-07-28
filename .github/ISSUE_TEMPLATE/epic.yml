@@ -1,0 +1,46 @@
+name: Epic
+description: Parent issue grouping a set of work items under one theme.
+title: "[EPIC-###] Epic name"
+labels: ["epic"]
+body:
+  - type: input
+    id: milestone
+    attributes:
+      label: Milestone
+      placeholder: "MS-001"
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: Epic Goal
+      description: What capability does this epic deliver?
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What is in / out of this epic.
+    validations:
+      required: true
+
+  - type: textarea
+    id: deps
+    attributes:
+      label: Dependencies
+      description: Epics this depends on (from ROADMAP.md).
+      placeholder: "Depends on EPIC-001"
+    validations:
+      required: true
+
+  - type: textarea
+    id: child_issues
+    attributes:
+      label: Child Issues
+      description: List the issues that make up this epic (to be created).
+      placeholder: |
+        - OPN-## ...
+        - OPN-## ...
