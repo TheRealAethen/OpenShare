@@ -1,109 +1,19 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
-const Store = require('electron-store');
 
-const store = new Store({ name: 'openshare-config' });
+const {
+  store,
+  profileDir,
+  getProfiles,
+  saveProfiles,
+  getProfile,
+  getQuota,
+  listFiles,
+  setFileMeta,
+} = require('./publishing/storage');
 
-const DAILY_LIMIT = 30;
-const PLATFORMS = ['tiktok', 'youtube', 'instagram'];
-
-const storageRoot = path.join(app.getPath('userData'), 'profiles');
-
-function ensureDir(p) {
-  console.time(`[TRACE] ensureDir(${p})`);
-  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
-  console.timeEnd(`[TRACE] ensureDir(${p})`);
-}
-
-function profileDir(profileId) {
-  const d = path.join(storageRoot, profileId);
-  console.time(`[TRACE] profileDir(${profileId})`);
-  ensureDir(d);
-  console.timeEnd(`[TRACE] profileDir(${profileId})`);
-  return d;
-}
-
-function getProfiles() {
-  return store.get('profiles', []);
-}
-
-function saveProfiles(profiles) {
-  store.set('profiles', profiles);
-}
-
-function getProfile(id) {
-  return getProfiles().find((p) => p.id === id);
-}
-
-function todayKey() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function getQuota(profileId) {
-  const q = store.get(`quota.${profileId}`, { date: todayKey(), used: 0 });
-  if (q.date !== todayKey()) {
-    q.date = todayKey();
-    q.used = 0;
-    store.set(`quota.${profileId}`, q);
-  }
-  return q;
-}
-
-function incrementQuota(profileId, count) {
-  const q = getQuota(profileId);
-  q.used += count;
-  store.set(`quota.${profileId}`, q);
-  return q;
-}
-
-function listFiles(profileId) {
-  const tag = `[TRACE] listFiles(profileId=${profileId})`;
-  console.time(tag + ' → total');
-  const dir = profileDir(profileId);
-  const metaPath = path.join(dir, 'meta.json');
-  let meta = {};
-  console.time(tag + ' → fs.existsSync + fs.readFileSync(meta.json)');
-  if (fs.existsSync(metaPath)) meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-  console.timeEnd(tag + ' → fs.existsSync + fs.readFileSync(meta.json)');
-  console.time(tag + ' → fs.readdirSync(filter meta.json)');
-  const files = fs.readdirSync(dir).filter((f) => f !== 'meta.json' && !f.endsWith('.json'));
-  console.timeEnd(tag + ' → fs.readdirSync(filter meta.json)');
-  console.time(tag + ' → map + build result array');
-  const result = files.map((f) => ({
-    name: f,
-    path: path.join(dir, f),
-    scheduledAt: meta[f]?.scheduledAt || null,
-    status: meta[f]?.status || 'pending',
-    uploadedAt: meta[f]?.uploadedAt || null,
-    lastError: meta[f]?.lastError || null,
-    platforms: meta[f]?.platforms || ['tiktok', 'youtube', 'instagram'],
-    privacy: meta[f]?.privacy || 'private',
-    madeForKids: meta[f]?.madeForKids || false,
-    title: meta[f]?.title || null,
-    desc: meta[f]?.desc || null,
-  }));
-  console.timeEnd(tag + ' → map + build result array');
-  console.timeEnd(tag + ' → total');
-  return result;
-}
-
-function setFileMeta(profileId, fileName, patch) {
-  const tag = `[TRACE] setFileMeta(profileId=${profileId}, fileName=${fileName})`;
-  console.time(tag + ' → total');
-  const dir = profileDir(profileId);
-  const metaPath = path.join(dir, 'meta.json');
-  let meta = {};
-  console.time(tag + ' → fs.existsSync + fs.readFileSync + JSON.parse(meta.json)');
-  if (fs.existsSync(metaPath)) meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-  console.timeEnd(tag + ' → fs.existsSync + fs.readFileSync + JSON.parse(meta.json)');
-  const key = fileName.trim();
-  meta[key] = { ...(meta[key] || {}), ...patch };
-  console.time(tag + ' → JSON.stringify + fs.writeFileSync(meta.json)');
-  fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
-  console.timeEnd(tag + ' → JSON.stringify + fs.writeFileSync(meta.json)');
-  console.timeEnd(tag + ' → total');
-}
+const { worker, engine } = require('./publishing');
 
 let winRef = null;
 
@@ -120,44 +30,15 @@ function createWindow() {
   winRef.loadFile('src/renderer/index.html');
 }
 
-function resetStaleUploadingStates() {
-  const profiles = getProfiles();
-  let totalReset = 0;
-  for (const profile of profiles) {
-    const dir = profileDir(profile.id);
-    const metaPath = path.join(dir, 'meta.json');
-    if (!fs.existsSync(metaPath)) continue;
-    let meta;
-    try {
-      meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-    } catch {
-      continue;
-    }
-    let changed = false;
-    for (const fileName of Object.keys(meta)) {
-      if (meta[fileName].status === 'uploading' || meta[fileName].status === 'failed') {
-        meta[fileName].status = 'pending';
-        meta[fileName].uploadedAt = null;
-        meta[fileName].lastError = null;
-        meta[fileName].platformResults = null;
-        changed = true;
-        totalReset++;
-      }
-    }
-    if (changed) {
-      fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
-    }
-  }
-  if (totalReset > 0) {
-    console.log('[startup] Reset ' + totalReset + ' stale uploading/failed file(s) to pending.');
-  } else {
-    console.log('[startup] No stale uploading or failed files found.');
-  }
-}
-
 app.whenReady().then(() => {
   worker.start();
-  resetStaleUploadingStates();
+  engine.init(worker, {
+    notifyProgress: (data) => {
+      console.log('[DBG] send progress:', JSON.stringify(data));
+      if (winRef && winRef.webContents) winRef.webContents.send('upload-progress', data);
+    },
+    schedulerInterval: 60000,
+  });
   createWindow();
 });
 
@@ -169,10 +50,7 @@ app.on('before-quit', () => {
   worker.stop();
 });
 
-let uploadToPlatform;
-try { uploadToPlatform = require('./uploader').uploadToPlatform; } catch (e) { console.error('uploader load error:', e); }
-
-const { worker } = require('./publishing');
+/* ---------- IPC handlers ---------- */
 
 ipcMain.handle('get-profiles', () => getProfiles());
 ipcMain.handle('create-profile', (_e, name) => {
@@ -299,7 +177,8 @@ ipcMain.handle('reset-file', (_e, { profileId, fileName }) => {
 });
 ipcMain.handle('retry-file', async (_e, { profileId, fileName }) => {
   setFileMeta(profileId, fileName, { status: 'pending', uploadedAt: null, lastError: null, platformResults: null });
-  worker.enqueue(() => runDailyForProfile(profileId));
+  const send = (data) => { console.log('[DBG] send progress:', JSON.stringify(data)); if (winRef && winRef.webContents) winRef.webContents.send('upload-progress', data); };
+  worker.enqueue(() => engine.runDailyForProfile(profileId, send));
   return { enqueued: true };
 });
 ipcMain.handle('rename-file', async (_e, { profileId, fileName, newName, title, desc }) => {
@@ -385,154 +264,7 @@ ipcMain.handle('disconnect-platform', (_e, { profileId, platform }) => {
 
 ipcMain.handle('run-daily', async (_e, profileId) => {
   console.log('[DBG] run-daily handler: enqueueing job for', profileId);
-  worker.enqueue(() => runDailyForProfile(profileId));
+  const send = (data) => { console.log('[DBG] send progress:', JSON.stringify(data)); if (winRef && winRef.webContents) winRef.webContents.send('upload-progress', data); };
+  worker.enqueue(() => engine.runDailyForProfile(profileId, send));
   return { enqueued: true };
 });
-
-async function runDailyForProfile(profileId) {
-  console.log('[TELEMETRY] ===== runDailyForProfile START profileId=' + profileId + ' =====');
-  const profile = getProfile(profileId);
-  const quota = getQuota(profileId);
-  const remaining = DAILY_LIMIT - quota.used;
-  const authState = profile ? profile.auth || {} : {};
-  console.log('[TELEMETRY] Profile auth: tiktok=' + (!!authState.tiktok) + ' youtube=' + (!!authState.youtube) + ' instagram=' + (!!authState.instagram));
-  console.log('[TELEMETRY] Quota: used=' + quota.used + ' / limit=' + DAILY_LIMIT + ' remaining=' + remaining);
-  if (remaining <= 0) return { done: true, reason: 'limit-reached', uploaded: 0 };
-
-  const auth = require('./auth');
-  const secrets = auth.loadSecrets();
-  const ytCreds = (secrets && secrets.youtube && secrets.youtube.clientId)
-    ? { clientId: secrets.youtube.clientId, clientSecret: secrets.youtube.clientSecret }
-    : {};
-
-  const now = Date.now();
-  console.log('[TELEMETRY] System time now=' + new Date(now).toISOString() + ' (' + now + 'ms)');
-  let all = listFiles(profileId);
-  /* Reset any stale failed files to pending so they get retried */
-  let staleCount = 0;
-  for (const f of all) {
-    if (f.status === 'failed') {
-      setFileMeta(profileId, f.name, { status: 'pending', uploadedAt: null, lastError: null, platformResults: null });
-      staleCount++;
-    }
-  }
-  if (staleCount > 0) {
-    console.log('[TELEMETRY] Reset ' + staleCount + ' stale failed file(s) to pending for retry.');
-    all = listFiles(profileId);
-  }
-  console.log('[TELEMETRY] listFiles returned ' + all.length + ' file(s) total');
-  all.forEach((f) => {
-    const schedMs = f.scheduledAt ? new Date(f.scheduledAt).getTime() : null;
-    const alreadyUploaded = f.status === 'uploaded';
-    const scheduledLater = !!(f.scheduledAt && schedMs > now);
-    const failed = f.status === 'failed';
-    const isPending = f.status === 'pending';
-    const hasYouTube = (f.platforms || []).includes('youtube');
-    let reason;
-    if (alreadyUploaded) reason = 'already-uploaded';
-    else if (failed) reason = 'failed';
-    else if (scheduledLater) reason = 'scheduled-later (sched=' + f.scheduledAt + ' > now=' + new Date(now).toISOString() + ')';
-    else if (!isPending) reason = 'not-pending(status=' + f.status + ')';
-    else reason = 'DUE';
-    console.log('[TELEMETRY] profile=' + profileId + ' file=' + JSON.stringify(f.name) +
-      ' status=' + f.status +
-      ' scheduledAt=' + f.scheduledAt +
-      ' schedMs=' + schedMs +
-      ' now=' + now +
-      ' nowISO=' + new Date(now).toISOString() +
-      ' alreadyUploaded=' + alreadyUploaded +
-      ' scheduledLater=' + scheduledLater +
-      ' failed=' + failed +
-      ' isPending=' + isPending +
-      ' platforms=' + JSON.stringify(f.platforms) +
-      ' hasYouTube=' + hasYouTube +
-      ' => reason=' + reason);
-  });
-  const due = all
-    .filter((f) => f.status === 'pending' && (!f.scheduledAt || new Date(f.scheduledAt).getTime() <= now))
-    .slice(0, remaining);
-
-  const skipped = all.length - due.length;
-  console.log('[TELEMETRY] profile=' + profileId + ' due=' + due.length + ' skipped=' + skipped + ' (out of ' + all.length + ' total files, remaining quota slots=' + remaining + ')');
-  due.forEach((f) => {
-    console.log('[TELEMETRY] profile=' + profileId + ' DUE file=' + JSON.stringify(f.name) + ' platforms=' + JSON.stringify(f.platforms) + ' hasYouTube=' + (f.platforms || []).includes('youtube'));
-  });
-
-  const total = due.length;
-  let uploaded = 0;
-  const results = [];
-  const send = (data) => { console.log('[DBG] send progress:', JSON.stringify(data)); if (winRef && winRef.webContents) winRef.webContents.send('upload-progress', data); };
-
-  if (total > 0) {
-    console.log('[TELEMETRY] profile=' + profileId + ' starting upload loop for ' + total + ' file(s)');
-    send({ type: 'start', files: due.map((f) => f.name) });
-  } else {
-    console.log('[TELEMETRY] profile=' + profileId + ' zero due files — returning uploaded=0');
-  }
-
-  for (let i = 0; i < due.length; i++) {
-    const file = due[i];
-    worker.setRuntimeState('uploading:' + profileId + ':' + file.name, true);
-    const targetPlatforms = (file.platforms && file.platforms.length) ? file.platforms : PLATFORMS;
-    console.log('[TELEMETRY] profile=' + profileId + ' processing file=' + JSON.stringify(file.name) + ' targetPlatforms=' + JSON.stringify(targetPlatforms) + ' hasYouTube=' + targetPlatforms.includes('youtube'));
-    const perPlatform = {};
-    for (let p = 0; p < targetPlatforms.length; p++) {
-      const platform = targetPlatforms[p];
-      try {
-        const profile = getProfile(profileId);
-        const tokens = profile.auth[platform];
-        if (!tokens) {
-          console.log('[TELEMETRY] profile=' + profileId + ' file=' + JSON.stringify(file.name) + ' platform=' + platform + ' SKIPPED: not-authenticated');
-          perPlatform[platform] = { ok: false, error: 'not-authenticated' }; continue;
-        }
-        console.log('[TELEMETRY] profile=' + profileId + ' file=' + JSON.stringify(file.name) + ' platform=' + platform + ' START upload');
-        const uploadOpts = {
-          privacy: file.privacy || 'private',
-          title: file.title || file.name,
-          desc: file.desc || '',
-          madeForKids: file.madeForKids || false,
-          onStatus: function (msg) { send({ type: 'status', file: file.name, platform: platform, msg: msg }); },
-        };
-        if (platform === 'youtube' && ytCreds.clientId) {
-          uploadOpts.clientId = ytCreds.clientId;
-          uploadOpts.clientSecret = ytCreds.clientSecret;
-        }
-        const res = await uploadToPlatform(platform, tokens, file.path, uploadOpts);
-        console.log('[TELEMETRY] profile=' + profileId + ' file=' + JSON.stringify(file.name) + ' platform=' + platform + ' DONE upload id=' + res.id);
-        if (res.updatedTokens) {
-          const p = getProfile(profileId);
-          if (p && p.auth && p.auth[platform]) {
-            p.auth[platform].access_token = res.updatedTokens.access_token;
-            if (res.updatedTokens.refresh_token) p.auth[platform].refresh_token = res.updatedTokens.refresh_token;
-            saveProfiles(getProfiles());
-            console.log('[TELEMETRY] profile=' + profileId + ' platform=' + platform + ' refreshed tokens persisted');
-          }
-        }
-        perPlatform[platform] = { ok: true, id: res.id };
-      } catch (err) {
-        console.log('[TELEMETRY] profile=' + profileId + ' file=' + JSON.stringify(file.name) + ' platform=' + platform + ' FAILED: ' + err.message);
-        perPlatform[platform] = { ok: false, error: err.message };
-        if (err.authError) perPlatform[platform].authError = true;
-      }
-      const filePct = Math.round(((p + 1) / targetPlatforms.length) * 100);
-      send({ type: 'file', file: file.name, pct: filePct });
-    }
-    const allOk = targetPlatforms.every((p) => perPlatform[p]?.ok);
-    worker.deleteRuntimeState('uploading:' + profileId + ':' + file.name);
-    console.log('[TELEMETRY] profile=' + profileId + ' file=' + JSON.stringify(file.name) + ' allOk=' + allOk + ' perPlatform=' + JSON.stringify(perPlatform));
-    setFileMeta(profileId, file.name, {
-      status: allOk ? 'uploaded' : 'failed',
-      uploadedAt: allOk ? new Date().toISOString() : null,
-      lastError: allOk ? null : JSON.stringify(perPlatform),
-      platformResults: perPlatform,
-    });
-    if (allOk) uploaded++;
-    else send({ type: 'file', file: file.name, pct: 100, failed: true });
-    results.push({ file: file.name, perPlatform });
-    send({ type: 'overall', pct: Math.round(((i + 1) / total) * 100) });
-  }
-
-  incrementQuota(profileId, uploaded);
-  console.log('[TELEMETRY] ===== runDailyForProfile END profile=' + profileId + ' uploaded=' + uploaded + ' due=' + total + ' skipped=' + skipped + ' =====');
-  return { done: false, uploaded, results, quota: getQuota(profileId), skipped };
-}

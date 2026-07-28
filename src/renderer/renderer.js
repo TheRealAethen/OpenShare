@@ -87,7 +87,7 @@ function applySettings() {
 }
 
 async function loadSettings() {
-  try { appSettings = await api.getSettings(); } catch {}
+  try { appSettings = await api.getSettings(); } catch { /* ignore */ }
   applySettings();
   const sl = $('#scale-slider');
   if (sl) sl.value = appSettings.scale;
