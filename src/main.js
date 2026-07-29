@@ -262,7 +262,8 @@ ipcMain.handle('auth-platform', async (_e, { profileId, platform }) => {
       const channel = await getYouTubeChannel(tokens);
       if (channel) profile.auth[platform].channel = channel;
     } catch (e) {
-      console.error('Failed to fetch YouTube channel:', e.message);
+      console.error('Failed to fetch YouTube channel:', e && (e.message || e));
+      if (e && e.stack) console.error('Stack:', e.stack);
     }
   }
   saveProfiles(profiles);

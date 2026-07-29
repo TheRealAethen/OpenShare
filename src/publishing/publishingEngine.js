@@ -294,6 +294,7 @@ async function runDailyForProfile(profileId, notifyProgress) {
           sendProgress({ type: 'upload:platform-done', profileId, fileName: file.name, platform, ok: false, error: errMsg });
           emitLog('error', '\'' + file.name + '\' upload to ' + platform + ' failed: ' + errMsg);
         }
+
       }
       const allOk = targetPlatforms.every((p) => perPlatform[p]?.ok);
       const failureReason = allOk ? '' : Object.keys(perPlatform)
