@@ -8,21 +8,33 @@ class Worker extends EventEmitter {
     this.started = false;
     this._looping = false;
     this._runtimeState = new Map();
+    this.status = 'stopped';
   }
 
   start() {
     if (this.started) return;
     this.started = true;
+    this.status = 'idle';
     console.log("[DBG-worker] start()");
     this.emit("started");
+    this._emitStatus();
     this._loop();
   }
 
   stop() {
+    if (!this.started) return;
     console.log("[DBG-worker] stop()");
     this.started = false;
+    if (this.queue.length === 0 && !this.running) {
+      this._doStop();
+    }
+  }
+
+  _doStop() {
     this._runtimeState.clear();
-    if (this.queue.length === 0 && !this.running) this.emit("stopped");
+    this.status = 'stopped';
+    this.emit("stopped");
+    this._emitStatus();
   }
 
   setRuntimeState(key, value) {
@@ -44,7 +56,15 @@ class Worker extends EventEmitter {
   enqueue(job) {
     console.log("[DBG-worker] enqueue() queueLen=", this.queue.length + 1);
     this.queue.push(job);
+    if (this.status === 'idle') {
+      this.status = 'queued';
+      this._emitStatus();
+    }
     if (this.started) this._loop();
+  }
+
+  _emitStatus() {
+    this.emit('worker:status', { status: this.status, queueLength: this.queue.length, running: this.running });
   }
 
   async _loop() {
@@ -54,6 +74,8 @@ class Worker extends EventEmitter {
       while (this.started && this.queue.length > 0) {
         const job = this.queue.shift();
         this.running = true;
+        this.status = 'running';
+        this._emitStatus();
         this.emit("jobStarted", job);
         console.log("[DBG-worker] job START");
         try {
@@ -68,11 +90,17 @@ class Worker extends EventEmitter {
           this.running = false;
         }
       }
-      if (this.started) this.emit("idle");
+      if (this.started) {
+        this.status = 'idle';
+        this._emitStatus();
+        this.emit("idle");
+      }
     } finally {
       this._looping = false;
     }
-    if (!this.started) this.emit("stopped");
+    if (!this.started) {
+      this._doStop();
+    }
   }
 }
 

@@ -145,6 +145,7 @@ body.dark .dot{background:#3a3f4b;}
 #progress-panel h4{margin:0 0 calc(10px * var(--ui-scale, 1));font-size:calc(14px * var(--ui-scale, 1));}
 .overall-bar{height:calc(8px * var(--ui-scale, 1));background:var(--line);border-radius:6px;overflow:hidden;margin-bottom:calc(12px * var(--ui-scale, 1));}
 .overall-fill{height:100%;background:var(--accent);width:0;transition:width .2s;}
+.overall-fill.fail{background:var(--err);}
 .prog-row{margin-bottom:calc(8px * var(--ui-scale, 1));}
 .prog-name{font-size:calc(12px * var(--ui-scale, 1));margin-bottom:3px;display:flex;justify-content:space-between;}
 .prog-bar{height:calc(6px * var(--ui-scale, 1));background:var(--line);border-radius:5px;overflow:hidden;}

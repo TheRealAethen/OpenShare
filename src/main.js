@@ -17,6 +17,12 @@ const { worker, engine } = require('./publishing');
 
 let winRef = null;
 
+function sendToRenderer(channel, data) {
+  if (winRef && winRef.webContents && !winRef.webContents.isDestroyed()) {
+    winRef.webContents.send(channel, data);
+  }
+}
+
 function createWindow() {
   winRef = new BrowserWindow({
     width: 1200,
@@ -32,10 +38,21 @@ function createWindow() {
 
 app.whenReady().then(() => {
   worker.start();
+  worker.on('worker:status', (payload) => {
+    sendToRenderer('upload-progress', { type: 'worker:status', ...payload });
+    const logMsg = 'Worker: ' + payload.status + ' (queue: ' + payload.queueLength + ')';
+    sendToRenderer('upload-progress', { type: 'log:append', level: 'info', message: logMsg, timestamp: Date.now() });
+  });
+  worker.on('jobFailed', (_job, err) => {
+    const errMsg = err && (err.message || String(err));
+    sendToRenderer('upload-progress', { type: 'log:append', level: 'error', message: 'Upload job failed: ' + errMsg, timestamp: Date.now() });
+  });
+  worker.on('jobCompleted', () => {
+    sendToRenderer('upload-progress', { type: 'log:append', level: 'ok', message: 'Upload job completed', timestamp: Date.now() });
+  });
   engine.init(worker, {
     notifyProgress: (data) => {
-      console.log('[DBG] send progress:', JSON.stringify(data));
-      if (winRef && winRef.webContents) winRef.webContents.send('upload-progress', data);
+      sendToRenderer('upload-progress', data);
     },
     schedulerInterval: 60000,
   });
@@ -172,13 +189,12 @@ ipcMain.handle('set-file-kids', (_e, { profileId, fileName, madeForKids }) => {
   return listFiles(profileId);
 });
 ipcMain.handle('reset-file', (_e, { profileId, fileName }) => {
-  setFileMeta(profileId, fileName, { status: 'pending', uploadedAt: null, lastError: null, platformResults: null });
+  setFileMeta(profileId, fileName, { status: 'pending', uploadedAt: null, lastError: null, failureReason: '', platformResults: null });
   return listFiles(profileId);
 });
 ipcMain.handle('retry-file', async (_e, { profileId, fileName }) => {
-  setFileMeta(profileId, fileName, { status: 'pending', uploadedAt: null, lastError: null, platformResults: null });
-  const send = (data) => { console.log('[DBG] send progress:', JSON.stringify(data)); if (winRef && winRef.webContents) winRef.webContents.send('upload-progress', data); };
-  worker.enqueue(() => engine.runDailyForProfile(profileId, send));
+  setFileMeta(profileId, fileName, { status: 'pending', uploadedAt: null, lastError: null, failureReason: '', platformResults: null });
+  worker.enqueue(() => engine.runDailyForProfile(profileId, (data) => sendToRenderer('upload-progress', data)));
   return { enqueued: true };
 });
 ipcMain.handle('rename-file', async (_e, { profileId, fileName, newName, title, desc }) => {
@@ -264,7 +280,6 @@ ipcMain.handle('disconnect-platform', (_e, { profileId, platform }) => {
 
 ipcMain.handle('run-daily', async (_e, profileId) => {
   console.log('[DBG] run-daily handler: enqueueing job for', profileId);
-  const send = (data) => { console.log('[DBG] send progress:', JSON.stringify(data)); if (winRef && winRef.webContents) winRef.webContents.send('upload-progress', data); };
-  worker.enqueue(() => engine.runDailyForProfile(profileId, send));
+  worker.enqueue(() => engine.runDailyForProfile(profileId, (data) => sendToRenderer('upload-progress', data)));
   return { enqueued: true };
 });

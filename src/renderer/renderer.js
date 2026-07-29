@@ -51,9 +51,15 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
 
 function log(msg) {
   if (!appSettings.devMode) return;
+  appendLog('debug', msg);
+}
+
+function appendLog(level, message) {
   const el = $('#log');
   if (!el) return;
-  el.textContent += '\n' + new Date().toLocaleTimeString() + '  ' + msg;
+  const time = new Date().toLocaleTimeString();
+  const label = level === 'error' ? '[ERROR]' : level === 'warn' ? '[WARN]' : level === 'ok' ? '[OK]' : '[INFO]';
+  el.textContent += '\n' + time + '  ' + label + ' ' + message;
   el.scrollTop = el.scrollHeight;
   const body = $('#log-body');
   if (body) body.classList.remove('collapsed');
@@ -65,11 +71,7 @@ function log(msg) {
 function updateLogVisibility() {
   const panel = $('#log-panel');
   if (!panel) return;
-  if (appSettings.devMode) {
-    panel.classList.remove('hidden');
-  } else {
-    panel.classList.add('hidden');
-  }
+  panel.classList.remove('hidden');
 }
 
 function applySettings() {
@@ -180,7 +182,8 @@ async function renderFiles() {
     const card = document.createElement('div');
     card.className = 'card';
     const sched = f.scheduledAt ? `<div class="meta">Scheduled: ${new Date(f.scheduledAt).toLocaleString()}</div>` : '';
-    const err = f.lastError ? `<div class="meta err">${f.lastError}</div>` : '';
+    const displayError = f.failureReason || (f.lastError ? '(see details)' : '');
+    const err = displayError ? `<div class="meta err">${escapeHtml(displayError)}</div>` : '';
     const platBtns = ['tiktok', 'youtube', 'instagram'].map((plat) => {
       const on = (f.platforms || []).includes(plat);
       return `<button class="plat ${on ? 'on' : ''}" data-plat="${plat}" data-file="${f.name}">${plat}</button>`;
@@ -347,13 +350,13 @@ function showProgress(files) {
     progressRows[name] = row.querySelector('.prog-fill');
   });
 }
-function updateProgress(name, pct, failed) {
+function updateProgress(name, pct, failed, reason) {
   const fill = progressRows[name];
   if (!fill) return;
-  fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  fill.style.width = failed ? '100%' : Math.max(0, Math.min(100, pct)) + '%';
   if (failed) fill.classList.add('fail');
   const pctEl = fill.closest('.prog-row').querySelector('.pct');
-  if (pctEl) pctEl.textContent = failed ? 'failed' : pct + '%';
+  if (pctEl) pctEl.textContent = failed ? (reason || 'failed') : pct + '%';
 }
 function setOverall(pct) {
   const o = $('#overall-fill');
@@ -365,15 +368,46 @@ function hideProgress() {
 }
 if (window.api && window.api.onProgress) {
   window.api.onProgress((data) => {
-    if (data.type === 'start') showProgress(data.files);
-    else if (data.type === 'file') updateProgress(data.file, data.pct, data.failed);
-    else if (data.type === 'overall') setOverall(data.pct);
-    else if (data.type === 'status') {
-      const fill = progressRows[data.file];
+    if (data.type === 'upload:run-start' || data.type === 'start') {
+      showProgress(data.files || []);
+    } else if (data.type === 'upload:file-done') {
+      if (data.ok) {
+        updateProgress(data.fileName, 100, false);
+      } else {
+        updateProgress(data.fileName, 100, true, data.failureReason || 'failed');
+        log('Upload failed: ' + data.fileName + (data.failureReason ? ' — ' + data.failureReason : ''));
+      }
+    } else if (data.type === 'upload:run-progress' || data.type === 'overall') {
+      setOverall(data.pct);
+    } else if (data.type === 'upload:platform-status' || data.type === 'status') {
+      const fileName = data.fileName || data.file;
+      const fill = progressRows[fileName];
       if (fill) {
         const pctEl = fill.closest('.prog-row').querySelector('.pct');
-        if (pctEl) pctEl.textContent = data.msg + '…';
+        if (pctEl) pctEl.textContent = (data.msg || 'processing') + '…';
       }
+    } else if (data.type === 'upload:run-complete') {
+      const panel = $('#progress-panel');
+      if (data.uploaded < data.total && panel) {
+        setOverall(100);
+        const oFill = $('#overall-fill');
+        if (oFill) oFill.classList.add('fail');
+        const h4 = panel.querySelector('h4');
+        if (h4) h4.textContent = 'Completed with errors (' + data.uploaded + '/' + data.total + ')';
+      } else {
+        hideProgress();
+      }
+      renderFiles();
+      loadProfiles();
+    } else if (data.type === 'worker:status') {
+      if (appSettings.devMode) {
+        log('Worker: ' + data.status + ' (queue: ' + data.queueLength + ')');
+      }
+      if (data.status === 'idle' || data.status === 'stopped') {
+        hideProgress();
+      }
+    } else if (data.type === 'log:append') {
+      appendLog(data.level || 'info', data.message);
     }
   });
 }

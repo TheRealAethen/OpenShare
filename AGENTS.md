@@ -16,11 +16,13 @@ galleries, daily quota limits, and scheduling.
 **No agent may implement work that is not backed by a GitHub Issue.**
 
 - Every change must trace: **implementation → PR → Issue → Epic → Milestone → PRD**.
-- If you cannot find an issue that justifies the work, **stop and open one first**.
+- If you cannot find an issue that justifies the work, **stop and open one first (THIS IS ONLY IF YOU HAVE EXPLICIT PERMISSION FROM THE HUMAN.)**.
 - Do not "fix it because it looks wrong" without an issue. Do not refactor on a
   whim. Do not make architectural decisions on your own.
 - Ambiguity is resolved by asking the issue owner / maintainer, **not** by
   inventing a solution.
+- OpenCode and other implementing agents **MUST NOT CREATE A NEW ISSUE WITHOUT A HUMAN'S EXPLICIT PERMISSION FIRST.** **The only exception to this is if OpenCode finds something like: -A security vulnerability; -A reproducible data-loss bug; -A release blocker, and even when the exception applies, you MUST explain why the issue was created.**
+- **Governance documents (AGENTS.md, PRD.md, ROADMAP.md, CONTRIBUTING.md, coding standards, and similar files) must not be modified unless the assigned GitHub Issue explicitly requires it. Suggestions for changes should be REPORTED, NEVER IMPLEMENTED FIRST.**
 
 This rule exists to eliminate drift. It is the difference between a project that
 scales across many agents and one that collapses into conflicting forks of intent.
