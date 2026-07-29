@@ -6,16 +6,62 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "lint": "eslint src --ext .js"
+    "lint": "eslint src --ext .js",
+    "package": "electron-builder --win --mac --linux",
+    "build:installer": "electron-builder --win --mac --linux",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fellipebittencourt/OpenShare.git"
   },
   "author": "Fellipe Bittencourt",
   "license": "SEE LICENSE IN LICENSE",
   "private": true,
+  "build": {
+    "appId": "com.openshare.app",
+    "productName": "OpenShare",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "!src/secrets.json"
+    ],
+    "extraResources": [],
+    "win": {
+      "target": "nsis",
+      "artifactName": "OpenShare-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "mac": {
+      "target": ["dmg", "zip"],
+      "artifactName": "OpenShare-${version}.${ext}"
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "artifactName": "OpenShare-${version}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "fellipebittencourt",
+      "repo": "OpenShare"
+    }
+  },
   "dependencies": {
-    "electron": "^30.0.0",
     "electron-store": "^8.1.0",
+    "form-data": "^4.0.0",
     "googleapis": "^144.0.0",
-    "node-fetch": "^2.7.0",
-    "form-data": "^4.0.0"
+    "node-fetch": "^2.7.0"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-builder": "^26.15.3"
   }
 }

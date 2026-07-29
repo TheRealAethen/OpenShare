@@ -1,4 +1,4 @@
-const { shell } = require('electron');
+const { app, shell } = require('electron');
 const http = require('node:http');
 const fetch = require('node-fetch');
 const { URL } = require('node:url');
@@ -27,18 +27,25 @@ const CLIENTS = {
 const fs = require('node:fs');
 const path = require('node:path');
 
+function secretsPath() {
+  if (app.isPackaged) {
+    return path.join(app.getPath('userData'), 'secrets.json');
+  }
+  return path.join(__dirname, 'secrets.json');
+}
+
 function loadSecrets() {
-  const p = path.join(__dirname, 'secrets.json');
   try {
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
+    return JSON.parse(fs.readFileSync(secretsPath(), 'utf8'));
   } catch {
     return {};
   }
 }
 
 function saveSecrets(secrets) {
-  const p = path.join(__dirname, 'secrets.json');
-  fs.writeFileSync(p, JSON.stringify(secrets, null, 2));
+  const dir = path.dirname(secretsPath());
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(secretsPath(), JSON.stringify(secrets, null, 2));
 }
 
 let activeServer = null;
@@ -96,7 +103,7 @@ async function authenticate(platform, _win) {
   const cfg = secrets[platform];
   const def = CLIENTS[platform];
   if (!cfg || !cfg.clientId) {
-    throw new Error(`Missing clientId for ${platform}. Add it to src/secrets.json`);
+    throw new Error(`Missing clientId for ${platform}. Add it to secrets.json (${secretsPath()})`);
   }
 
   const server = startServer();

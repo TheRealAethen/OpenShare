@@ -15,9 +15,12 @@ window.addEventListener('error', (e) => {
 console.log('=== OpenShare renderer v2 loaded ===');
 
 window.addEventListener('unhandledrejection', (e) => {
-  console.error('RENDERER PROMISE REJECTION:', e.reason);
+  const reason = e.reason || {};
+  const msg = reason.message || String(reason);
+  const stk = reason.stack ? '\n' + reason.stack : '';
+  console.error('RENDERER PROMISE REJECTION:', msg);
   const el = document.getElementById('log');
-  if (appSettings.devMode && el) { el.textContent += '\n[PROMISE ERROR] ' + (e.reason && e.reason.message ? e.reason.message : e.reason); }
+  if (appSettings.devMode && el) { el.textContent += '\n[PROMISE ERROR] ' + msg + stk; }
 });
 
 function ask(title, placeholder) {
@@ -517,7 +520,8 @@ $$('#auth-panel .auth-buttons button, .auth-buttons button').forEach((b) => {
       log(platform + ' authenticated.');
       loadProfiles(); refreshSettings();
     } catch (e) {
-      log('Auth error (' + platform + '): ' + e.message);
+      log('Auth error (' + platform + '): ' + (e && e.message ? e.message : e));
+      if (e && e.stack) console.error('Auth error stack:', e.stack);
     }
   };
 });

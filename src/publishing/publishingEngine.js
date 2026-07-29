@@ -58,7 +58,8 @@ async function tick() {
         console.log('[scheduler] Profile ' + profile.id + ' uploaded ' + result.uploaded + ' file(s).');
       }
     } catch (err) {
-      console.error('[scheduler] Error for profile ' + profile.id + ':', err.message);
+      console.error('[scheduler] Error for profile ' + profile.id + ':', err && (err.message || err));
+      if (err && err.stack) console.error('[scheduler] Stack:', err.stack);
     } finally {
       _worker.deleteRuntimeState(key);
     }
@@ -221,8 +222,11 @@ async function runDailyForProfile(profileId, notifyProgress) {
         }
         perPlatform[platform] = { ok: true, id: res.id };
       } catch (err) {
-        console.log('[TELEMETRY] profile=' + profileId + ' file=' + JSON.stringify(file.name) + ' platform=' + platform + ' FAILED: ' + err.message);
-        perPlatform[platform] = { ok: false, error: err.message };
+        const errMsg = err && (err.message || String(err));
+        const errStack = err && err.stack;
+        console.log('[TELEMETRY] profile=' + profileId + ' file=' + JSON.stringify(file.name) + ' platform=' + platform + ' FAILED: ' + errMsg);
+        if (errStack) console.log('[TELEMETRY] stack:', errStack);
+        perPlatform[platform] = { ok: false, error: errMsg, stack: errStack || '' };
         if (err.authError) perPlatform[platform].authError = true;
       }
       const filePct = Math.round(((p + 1) / targetPlatforms.length) * 100);
