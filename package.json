@@ -6,6 +6,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
+    "test": "jest",
     "lint": "eslint src --ext .js",
     "package": "electron-builder --win --mac --linux",
     "build:installer": "electron-builder --win --mac --linux",
@@ -41,11 +42,16 @@
       "deleteAppDataOnUninstall": false
     },
     "mac": {
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "artifactName": "OpenShare-${version}.${ext}"
     },
     "linux": {
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "artifactName": "OpenShare-${version}.${ext}"
     },
     "publish": {
@@ -62,6 +68,8 @@
   },
   "devDependencies": {
     "electron": "^30.0.0",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "eslint": "^8.57.1",
+    "jest": "^30.4.2"
   }
 }
