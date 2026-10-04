@@ -81,16 +81,21 @@ Key design principles:
 ### 3.3 Upload Engine & Platform Adapter Framework (`src/uploader.js`)
 The uploader is the boundary between orchestration and platform specifics.
 
-- `uploadToPlatform(platform, tokens, filePath, opts)` dispatches to the correct
-  adapter implementation:
-  - **TikTok** — file init → PUT upload → publish.
-  - **YouTube** — optional ffmpeg transcode to H.264/AAC MP4 → resumable
-    `videos.insert` via googleapis.
-  - **Instagram** — Graph API media creation (REELS) → publish.
+- Adapters live in `src/adapters/`, each extending `BaseAdapter`:
+  - `TikTokAdapter.js` — file init → PUT upload → publish.
+  - `YouTubeAdapter.js` — optional ffmpeg transcode to H.264/AAC MP4 → resumable
+    `videos.insert` via googleapis; also exposes `getChannel(tokens)`.
+  - `InstagramAdapter.js` — Graph API media creation (REELS) → publish.
+- `uploader.js` builds an `AdapterRegistry` at module load and registers one
+  instance per platform. It contains no platform logic.
+- `uploadToPlatform(platform, tokens, filePath, opts)` resolves the adapter with
+  `registry.get(platform)` and delegates to its `upload(tokens, filePath, opts)`.
+  An unregistered platform rejects with `Unsupported platform`.
+- `getYouTubeChannel(tokens)` delegates to the YouTube adapter's `getChannel()`.
 - Reports per-platform status through an `onStatus` callback used for progress.
-- Adapters are **pluggable**: each platform implements a common contract
-  (`authenticate`, `upload`, `status`). New platforms are added by registering a
-  new adapter, not by branching on a string inside orchestration code.
+- Adapters are **pluggable**: to add a platform, create a `BaseAdapter` subclass
+  and register it in `uploader.js`. Orchestration code never branches on a
+  platform string.
 - Failure classification (transient vs permanent) and retry/backoff live here so
   the daily-run pipeline can decide whether to mark a file `failed` or retry.
 
