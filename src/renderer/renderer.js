@@ -132,9 +132,9 @@ async function renderProfileGrid() {
   for (const p of profilesCache) {
     const files = await api.listFiles(p.id);
     const quota = await api.getQuota(p.id);
-    const auth = p.auth || {};
+    const connected = p.isConnected || {};
     const dots = ['tiktok', 'youtube', 'instagram']
-      .map((plat) => `<span class="dot ${auth[plat] ? 'on' : ''}" title="${plat}"></span>`).join('');
+      .map((plat) => `<span class="dot ${connected[plat] ? 'on' : ''}" title="${plat}"></span>`).join('');
     const card = document.createElement('div');
     card.className = 'profile-card';
     card.innerHTML = `
@@ -460,23 +460,24 @@ async function refreshSettings() {
   const quota = await api.getQuota(currentProfile);
   $('#quota-text').textContent = `Daily quota: ${quota.used} / 30`;
   const profile = profilesCache.find((p) => p.id === currentProfile);
-  const auth = profile ? profile.auth : {};
+  const connected = profile ? profile.isConnected : {};
+  const channels = profile ? profile.channels : {};
   const dd = $('#default-desc');
   if (dd) dd.value = (profile && profile.defaultDesc) || '';
   $$('.auth-buttons .acct').forEach((img) => img.remove());
   $$('.auth-buttons .disconnect').forEach((b) => b.remove());
   $$('.auth-buttons button').forEach((b) => {
     const plat = b.dataset.platform;
-    const token = auth[plat];
-    if (token && token.channel && token.channel.avatar) {
+    const channel = channels[plat];
+    if (connected[plat] && channel && channel.avatar) {
       const img = document.createElement('img');
       img.className = 'acct';
-      img.src = token.channel.avatar;
-      img.title = token.channel.name || plat;
+      img.src = channel.avatar;
+      img.title = channel.name || plat;
       img.alt = plat + ' account';
       b.insertAdjacentElement('afterend', img);
     }
-    if (token) {
+    if (connected[plat]) {
       const dis = document.createElement('button');
       dis.className = 'disconnect';
       dis.textContent = 'Disconnect';
@@ -542,14 +543,12 @@ $$('#auth-panel .auth-buttons button, .auth-buttons button').forEach((b) => {
   b.onclick = async () => {
     if (!currentProfile) return alert('Select a profile first.');
     const platform = b.dataset.platform;
-    const secrets = await api.getSecrets();
-    const existing = secrets[platform] || {};
-    const cred = await askCredentials(platform, existing);
+    const status = (await api.getSecretStatus())[platform];
+    const cred = await askCredentials(platform, status);
     if (!cred) return;
-    secrets[platform] = { clientId: cred.id, clientSecret: cred.secret };
-    await api.saveSecrets(secrets);
     log('Authenticating ' + platform + '...');
     try {
+      await api.saveSecret({ platform, clientId: cred.id, clientSecret: cred.secret });
       await api.authPlatform({ profileId: currentProfile, platform });
       log(platform + ' authenticated.');
       loadProfiles(); refreshSettings();
@@ -566,15 +565,17 @@ const CRED_HELP = {
   instagram: 'Get App ID + App Secret from developers.facebook.com (Instagram Graph). Redirect URI: http://localhost:18923/callback',
 };
 
-function askCredentials(platform, existing) {
+function askCredentials(platform, status) {
   return new Promise((resolve) => {
     const modal = document.getElementById('cred-modal');
     document.getElementById('cred-title').textContent = 'Connect ' + platform.charAt(0).toUpperCase() + platform.slice(1);
     document.getElementById('cred-help').textContent = CRED_HELP[platform] || '';
     const idEl = document.getElementById('cred-id');
     const secEl = document.getElementById('cred-secret');
-    idEl.value = existing.clientId || '';
-    secEl.value = existing.clientSecret || '';
+    idEl.value = '';
+    secEl.value = '';
+    idEl.placeholder = status.hasClientId ? 'Saved — leave blank to keep' : 'Paste client id';
+    secEl.placeholder = status.hasClientSecret ? 'Saved — leave blank to keep' : 'Paste client secret';
     modal.classList.remove('hidden');
     idEl.focus();
     const ok = document.getElementById('cred-save');
@@ -585,7 +586,9 @@ function askCredentials(platform, existing) {
       resolve(val);
     };
     const submit = () => {
-      if (!idEl.value.trim() || !secEl.value.trim()) { alert('Both fields are required.'); return; }
+      const missingId = !idEl.value.trim() && !status.hasClientId;
+      const missingSecret = !secEl.value.trim() && !status.hasClientSecret;
+      if (missingId || missingSecret) { alert('Both fields are required.'); return; }
       done({ id: idEl.value.trim(), secret: secEl.value.trim() });
     };
     ok.onclick = submit;

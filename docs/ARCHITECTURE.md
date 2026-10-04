@@ -227,8 +227,12 @@ Records are never edited or removed by the app.
 ## 6. Security Design
 
 - **Process isolation:** renderer has no Node integration; only `window.api`.
-- **Secret handling:** OAuth client secrets and tokens never reach the renderer
-  except opaque auth state. `src/secrets.json` is git-ignored.
+- **Secret handling:** OAuth client secrets and tokens never reach the renderer.
+  IPC returns profiles through `toPublicProfile()` (`src/profileView.js`), which
+  gives metadata, `isConnected` booleans, and channel name/avatar only. Secret
+  status is `hasClientId` / `hasClientSecret` booleans, and new secrets are
+  written by `save-secret`, which merges them in the main process. Blank fields
+  keep the saved value. `src/secrets.json` is git-ignored.
 - **CSP:** `index.html` ships a Content-Security-Policy restricting sources.
 - **State validation:** OAuth `state` is randomized and verified.
 - **File safety:** `delete-file` retries on `EBUSY`; renames sanitize filenames.

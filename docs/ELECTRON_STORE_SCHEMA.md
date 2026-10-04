@@ -150,17 +150,21 @@ No keys are unused. No key is written but never read. Field names are
 consistent across `electron-store` and `meta.json` (for example
 `scheduledAt`, `uploadedAt`, `platformResults`).
 
-## 5. Security Note (Open)
+## 5. Renderer Boundary
 
-Two IPC handlers currently return sensitive data to the renderer, which
-[PRD.md NFR-001](../PRD.md) and [AGENTS.md §2](../AGENTS.md) prohibit:
+Resolved by issue #67. The renderer receives no tokens or client secrets:
+
+- Every profile-returning IPC handler goes through `toPublicProfile()` in
+  `src/profileView.js`. The renderer gets `isConnected` booleans and channel
+  name/avatar only.
+- `get-secrets` is removed. `get-secret-status` returns `hasClientId` and
+  `hasClientSecret` booleans. `save-secret` writes one platform's credentials in
+  the main process.
+
+The previous exposure, kept here for history, was:
 
 - `get-profiles` returns full `Profile` objects, including
   `auth.*.access_token` and `auth.*.refresh_token`.
 - `get-secrets` returns the contents of `secrets.json`, including OAuth
   client secrets.
 
-This document records the behavior and does not change it. The fix needs its
-own issue, because it touches the renderer contract. The fix should return
-only a boolean `connected` per platform and channel metadata from
-`get-profiles`, and it should keep `get-secrets` out of the renderer.
