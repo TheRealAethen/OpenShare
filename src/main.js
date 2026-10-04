@@ -14,6 +14,11 @@ const {
 } = require('./publishing/storage');
 
 const { worker, engine } = require('./publishing');
+const { toPublicProfile, toSecretStatus, mergeSecret } = require('./profileView');
+
+function publicProfiles() {
+  return getProfiles().map(toPublicProfile);
+}
 
 let winRef = null;
 
@@ -69,27 +74,27 @@ app.on('before-quit', () => {
 
 /* ---------- IPC handlers ---------- */
 
-ipcMain.handle('get-profiles', () => getProfiles());
+ipcMain.handle('get-profiles', () => publicProfiles());
 ipcMain.handle('create-profile', (_e, name) => {
   const id = `p_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const profiles = getProfiles();
   profiles.push({ id, name, auth: {}, defaultDesc: '' });
   saveProfiles(profiles);
   profileDir(id);
-  return profiles;
+  return publicProfiles();
 });
 ipcMain.handle('set-profile-desc', (_e, { profileId, defaultDesc }) => {
   const profiles = getProfiles();
   const profile = profiles.find((p) => p.id === profileId);
   profile.defaultDesc = defaultDesc || '';
   saveProfiles(profiles);
-  return profiles;
+  return publicProfiles();
 });
 ipcMain.handle('delete-profile', (_e, id) => {
   const profiles = getProfiles().filter((p) => p.id !== id);
   saveProfiles(profiles);
   fs.rmSync(profileDir(id), { recursive: true, force: true });
-  return profiles;
+  return publicProfiles();
 });
 
 ipcMain.handle('list-files', (_e, profileId) => listFiles(profileId));
@@ -245,14 +250,14 @@ ipcMain.handle('save-settings', (_e, settings) => {
   return settings;
 });
 
-ipcMain.handle('get-secrets', () => {
+ipcMain.handle('get-secret-status', () => {
   const auth = require('./auth');
-  return auth.loadSecrets();
+  return toSecretStatus(auth.loadSecrets());
 });
-ipcMain.handle('save-secrets', (_e, secrets) => {
+ipcMain.handle('save-secret', (_e, { platform, clientId, clientSecret }) => {
   const auth = require('./auth');
-  auth.saveSecrets(secrets);
-  return secrets;
+  auth.saveSecrets(mergeSecret(auth.loadSecrets(), platform, { clientId, clientSecret }));
+  return toSecretStatus(auth.loadSecrets());
 });
 
 ipcMain.handle('auth-platform', async (_e, { profileId, platform }) => {
@@ -273,7 +278,7 @@ ipcMain.handle('auth-platform', async (_e, { profileId, platform }) => {
     }
   }
   saveProfiles(profiles);
-  return profile.auth;
+  return toPublicProfile(profile);
 });
 
 ipcMain.handle('disconnect-platform', (_e, { profileId, platform }) => {
@@ -281,7 +286,7 @@ ipcMain.handle('disconnect-platform', (_e, { profileId, platform }) => {
   const profile = profiles.find((p) => p.id === profileId);
   if (profile && profile.auth) delete profile.auth[platform];
   saveProfiles(profiles);
-  return profiles;
+  return publicProfiles();
 });
 
 ipcMain.handle('run-daily', async (_e, profileId) => {

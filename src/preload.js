@@ -21,8 +21,8 @@ const api = {
   runDaily: (profileId) => ipcRenderer.invoke('run-daily', profileId),
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
-  getSecrets: () => ipcRenderer.invoke('get-secrets'),
-  saveSecrets: (secrets) => ipcRenderer.invoke('save-secrets', secrets),
+  getSecretStatus: () => ipcRenderer.invoke('get-secret-status'),
+  saveSecret: (args) => ipcRenderer.invoke('save-secret', args),
   onProgress: (cb) => ipcRenderer.on('upload-progress', (_e, data) => cb(data)),
   onImportProgress: (cb) => ipcRenderer.on('import-progress', (_e, data) => cb(data)),
 };
