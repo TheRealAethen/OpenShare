@@ -161,8 +161,19 @@ in `meta.json` is automatically reset to `pending` (see §3.5).
 
 1. `run-daily` invoked for a profile.
 2. Read today's quota; if `used >= 30`, return `limit-reached`.
-3. List files; select `pending` files whose `scheduledAt` (if any) is now or past.
-4. Slice to remaining quota.
+3. List files and evaluate each one (`src/publishing/selection.js`). A file is
+   selected only if all of these hold, checked in this order:
+    - `status` is `uploaded` → skipped `SKIPPED_ALREADY_UPLOADED`.
+    - `status` is not `pending` or `failed` → skipped `SKIPPED_NOT_ELIGIBLE_STATUS`.
+      `failed` files are eligible for retry; they are not rewritten to `pending`
+      on disk.
+    - `scheduledAt` is set and in the future → skipped `SKIPPED_NOT_DUE`.
+4. Slice the selected files to remaining quota; the rest are skipped
+   `SKIPPED_QUOTA_REACHED`. Quota is spent only on selected files. Every skip is
+   logged to the console with its reason and shown in the UI log, except
+   already-uploaded files, which are logged to the console only.
+   A file in flight in this process, or one whose status changes before its
+   upload starts, is skipped `SKIPPED_IN_FLIGHT` or `SKIPPED_NOT_ELIGIBLE_STATUS`.
 5. For each file, for each selected platform:
     - Skip if not authenticated (`not-authenticated`).
     - Upload via the platform adapter; record per-platform result.

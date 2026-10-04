@@ -1,5 +1,6 @@
 const path = require('node:path');
 const fs = require('node:fs');
+const { SkipReason, SkipMessage, evaluateFile, selectEligibleFiles } = require('./selection');
 const {
   DAILY_LIMIT,
   PLATFORMS,
@@ -130,11 +131,8 @@ function resetStaleUploadingStates() {
     }
     let changed = false;
     for (const fileName of Object.keys(meta)) {
-      if (meta[fileName].status === 'uploading' || meta[fileName].status === 'failed') {
+      if (meta[fileName].status === 'uploading') {
         meta[fileName].status = 'pending';
-        meta[fileName].uploadedAt = null;
-        meta[fileName].lastError = null;
-        meta[fileName].failureReason = '';
         changed = true;
         totalReset++;
       }
@@ -144,9 +142,16 @@ function resetStaleUploadingStates() {
     }
   }
   if (totalReset > 0) {
-    console.log('[startup] Reset ' + totalReset + ' stale uploading/failed file(s) to pending.');
+    console.log('[startup] Reset ' + totalReset + ' stale uploading file(s) to pending.');
   } else {
-    console.log('[startup] No stale uploading or failed files found.');
+    console.log('[startup] No stale uploading files found.');
+  }
+}
+
+function logSkip(profileId, fileName, reason, emitLog) {
+  console.log('[selection] profile=' + profileId + ' file=' + JSON.stringify(fileName) + ' ' + reason + ' (' + SkipMessage[reason] + ')');
+  if (reason !== SkipReason.ALREADY_UPLOADED) {
+    emitLog('info', '\'' + fileName + '\' skipped: ' + SkipMessage[reason]);
   }
 }
 
@@ -187,55 +192,11 @@ async function runProfileUpload(profileId, notifyProgress) {
 
   const now = Date.now();
   console.log('[TELEMETRY] System time now=' + new Date(now).toISOString() + ' (' + now + 'ms)');
-  let all = listFiles(profileId);
-  let staleCount = 0;
-  for (const f of all) {
-    if (f.status === 'failed') {
-      setFileMeta(profileId, f.name, { status: 'pending', uploadedAt: null, lastError: null });
-      staleCount++;
-    }
+  const { selected: due, skipped } = selectEligibleFiles(listFiles(profileId), { now, remainingQuota: remaining });
+  for (const { file, reason } of skipped) {
+    logSkip(profileId, file.name, reason, emitLog);
   }
-  if (staleCount > 0) {
-    console.log('[TELEMETRY] Reset ' + staleCount + ' stale failed file(s) to pending for retry.');
-    all = listFiles(profileId);
-  }
-  console.log('[TELEMETRY] listFiles returned ' + all.length + ' file(s) total');
-  all.forEach((f) => {
-    const schedMs = f.scheduledAt ? new Date(f.scheduledAt).getTime() : null;
-    const alreadyUploaded = f.status === 'uploaded';
-    const scheduledLater = !!(f.scheduledAt && schedMs > now);
-    const failed = f.status === 'failed';
-    const isPending = f.status === 'pending';
-    const hasYouTube = (f.platforms || []).includes('youtube');
-    let reason;
-    if (alreadyUploaded) reason = 'already-uploaded';
-    else if (failed) reason = 'failed';
-    else if (scheduledLater) reason = 'scheduled-later (sched=' + f.scheduledAt + ' > now=' + new Date(now).toISOString() + ')';
-    else if (!isPending) reason = 'not-pending(status=' + f.status + ')';
-    else reason = 'DUE';
-    console.log('[TELEMETRY] profile=' + profileId + ' file=' + JSON.stringify(f.name) +
-      ' status=' + f.status +
-      ' scheduledAt=' + f.scheduledAt +
-      ' schedMs=' + schedMs +
-      ' now=' + now +
-      ' nowISO=' + new Date(now).toISOString() +
-      ' alreadyUploaded=' + alreadyUploaded +
-      ' scheduledLater=' + scheduledLater +
-      ' failed=' + failed +
-      ' isPending=' + isPending +
-      ' platforms=' + JSON.stringify(f.platforms) +
-      ' hasYouTube=' + hasYouTube +
-      ' => reason=' + reason);
-  });
-  const due = all
-    .filter((f) => f.status === 'pending' && (!f.scheduledAt || new Date(f.scheduledAt).getTime() <= now))
-    .slice(0, remaining);
-
-  const skipped = all.length - due.length;
-  console.log('[TELEMETRY] profile=' + profileId + ' due=' + due.length + ' skipped=' + skipped + ' (out of ' + all.length + ' total files, remaining quota slots=' + remaining + ')');
-  due.forEach((f) => {
-    console.log('[TELEMETRY] profile=' + profileId + ' DUE file=' + JSON.stringify(f.name) + ' platforms=' + JSON.stringify(f.platforms) + ' hasYouTube=' + (f.platforms || []).includes('youtube'));
-  });
+  console.log('[selection] profile=' + profileId + ' selected=' + due.length + ' skipped=' + skipped.length + ' remainingQuota=' + remaining);
 
   const total = due.length;
   let uploaded = 0;
@@ -253,12 +214,13 @@ async function runProfileUpload(profileId, notifyProgress) {
     const file = due[i];
     const fileKey = profileId + ':' + file.name;
     if (_activeFiles.has(fileKey)) {
-      console.log('[TELEMETRY] profile=' + profileId + ' file=' + JSON.stringify(file.name) + ' already in flight — skipping');
+      logSkip(profileId, file.name, SkipReason.IN_FLIGHT, emitLog);
       continue;
     }
     const current = listFiles(profileId).find((f) => f.name === file.name);
-    if (!current || current.status !== 'pending') {
-      console.log('[TELEMETRY] profile=' + profileId + ' file=' + JSON.stringify(file.name) + ' no longer pending (status=' + (current && current.status) + ') — skipping');
+    const staleReason = current ? evaluateFile(current, Date.now()) : SkipReason.NOT_ELIGIBLE_STATUS;
+    if (staleReason) {
+      logSkip(profileId, file.name, staleReason, emitLog);
       continue;
     }
     _activeFiles.add(fileKey);
@@ -352,12 +314,12 @@ async function runProfileUpload(profileId, notifyProgress) {
   }
 
   incrementQuota(profileId, uploaded);
-  console.log('[TELEMETRY] ===== runDailyForProfile END profile=' + profileId + ' uploaded=' + uploaded + ' due=' + total + ' skipped=' + skipped + ' =====');
-  sendProgress({ type: 'upload:run-complete', profileId, uploaded, total, results, quota: getQuota(profileId), skipped });
+  console.log('[TELEMETRY] ===== runDailyForProfile END profile=' + profileId + ' uploaded=' + uploaded + ' due=' + total + ' skipped=' + skipped.length + ' =====');
+  sendProgress({ type: 'upload:run-complete', profileId, uploaded, total, results, quota: getQuota(profileId), skipped: skipped.length });
   if (total > 0) {
     emitLog(uploaded === total ? 'ok' : 'warn', 'Upload run complete — ' + uploaded + '/' + total + ' files uploaded');
   }
-  return { done: false, uploaded, results, quota: getQuota(profileId), skipped };
+  return { done: false, uploaded, results, quota: getQuota(profileId), skipped: skipped.length };
 }
 
 module.exports = { init, resetStaleUploadingStates, runDailyForProfile, startScheduler, stopScheduler, tick };
