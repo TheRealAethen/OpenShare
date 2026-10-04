@@ -152,6 +152,29 @@ in `meta.json` is automatically reset to `pending` (see §3.5).
 }
 ```
 
+### Upload history (per profile, append-only)
+Stored in `electron-store` under `history.<profileId>` as an array. Each
+platform attempt that finishes, successfully or with an error, appends one
+record. Attempts skipped because the platform already succeeded are not
+recorded again. Unauthenticated platforms are not recorded either, since no
+attempt was made.
+```json
+{
+  "jobId": "uuid — one per file per run",
+  "fileName": "clip.mp4",
+  "title": "My Clip",
+  "platform": "youtube",
+  "status": "uploaded | failed",
+  "timestamp": "2026-10-04T12:00:00.000Z",
+  "errorMessage": null,
+  "platformPostId": "id returned by the platform, or null"
+}
+```
+Isolation: each profile's history lives under its own key. Writes go only to
+that key, and `getHistory(profileId, { platform, status, offset, limit })`
+reads only that key. It returns the newest records first with `{ items, total }`.
+Records are never edited or removed by the app.
+
 ### Quota (per profile, per day)
 ```json
 { "date": "2026-07-18", "used": 7 }

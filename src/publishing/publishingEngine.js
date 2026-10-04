@@ -1,7 +1,9 @@
 const path = require('node:path');
 const fs = require('node:fs');
+const { randomUUID } = require('node:crypto');
 const { SkipReason, SkipMessage, evaluateFile, selectEligibleFiles } = require('./selection');
 const {
+  appendHistory,
   DAILY_LIMIT,
   PLATFORMS,
   getProfiles,
@@ -224,6 +226,8 @@ async function runProfileUpload(profileId, notifyProgress) {
       continue;
     }
     _activeFiles.add(fileKey);
+    const jobId = randomUUID();
+    const title = current.title || current.name;
     try {
       const targetPlatforms = (current.platforms && current.platforms.length) ? current.platforms : PLATFORMS;
       console.log('[TELEMETRY] profile=' + profileId + ' processing file=' + JSON.stringify(file.name) + ' targetPlatforms=' + JSON.stringify(targetPlatforms) + ' hasYouTube=' + targetPlatforms.includes('youtube'));
@@ -272,6 +276,7 @@ async function runProfileUpload(profileId, notifyProgress) {
           }
           perPlatform[platform] = { ok: true, id: res.id };
           setFileMeta(profileId, file.name, { platformResults: perPlatform });
+          appendHistory(profileId, [{ jobId, fileName: file.name, title, platform, status: 'uploaded', timestamp: new Date().toISOString(), errorMessage: null, platformPostId: res.id || null }]);
           sendProgress({ type: 'upload:platform-done', profileId, fileName: file.name, platform, ok: true, id: res.id });
           emitLog('ok', '\'' + file.name + '\' uploaded to ' + platform + ' (id=' + res.id + ')');
         } catch (err) {
@@ -280,6 +285,7 @@ async function runProfileUpload(profileId, notifyProgress) {
           console.log('[TELEMETRY] profile=' + profileId + ' file=' + JSON.stringify(file.name) + ' platform=' + platform + ' FAILED: ' + errMsg);
           if (errStack) console.log('[TELEMETRY] stack:', errStack);
           perPlatform[platform] = { ok: false, error: errMsg, stack: errStack || '' };
+          appendHistory(profileId, [{ jobId, fileName: file.name, title, platform, status: 'failed', timestamp: new Date().toISOString(), errorMessage: errMsg, platformPostId: null }]);
           if (err.authError) perPlatform[platform].authError = true;
           sendProgress({ type: 'upload:platform-done', profileId, fileName: file.name, platform, ok: false, error: errMsg });
           emitLog('error', '\'' + file.name + '\' upload to ' + platform + ' failed: ' + errMsg);

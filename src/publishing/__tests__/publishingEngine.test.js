@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const mockState = { files: {}, profileRoot: null, quotaUsed: 0 };
+const mockState = { files: {}, profileRoot: null, quotaUsed: 0, history: {} };
 const mockUploadToPlatform = jest.fn();
 
 jest.mock('../storage', () => {
@@ -37,6 +37,9 @@ jest.mock('../storage', () => {
       uploadedAt: null,
       ...f,
     })),
+    appendHistory: (pid, entries) => {
+      mockState.history[pid] = (mockState.history[pid] || []).concat(entries);
+    },
     setFileMeta: (_pid, name, patch) => {
       mockState.files[name] = { ...(mockState.files[name] || {}), ...patch };
     },
@@ -54,6 +57,7 @@ const PLATFORMS = ['tiktok', 'youtube', 'instagram'];
 beforeEach(() => {
   mockState.files = { 'clip.mp4': { status: 'pending' } };
   mockState.quotaUsed = 0;
+  mockState.history = {};
   mockUploadToPlatform.mockReset();
   mockUploadToPlatform.mockImplementation(async (platform) => ({ id: platform + '-id' }));
   jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -136,6 +140,27 @@ describe('idempotent upload status', () => {
     expect(meta['clip.mp4'].platformResults).toEqual(platformResults);
     expect(meta['failed.mp4'].status).toBe('failed');
     fs.rmSync(mockState.profileRoot, { recursive: true, force: true });
+  });
+
+  test('completed and failed platform attempts append to history without overwriting earlier entries', async () => {
+    mockState.history = { p1: [{ jobId: 'old', fileName: 'old.mp4', platform: 'youtube', status: 'uploaded' }] };
+    mockUploadToPlatform.mockImplementation(async (platform) => {
+      if (platform === 'tiktok') throw new Error('rate limited');
+      return { id: platform + '-post' };
+    });
+
+    await engine.runDailyForProfile('p1');
+
+    const history = mockState.history.p1;
+    expect(history[0]).toEqual({ jobId: 'old', fileName: 'old.mp4', platform: 'youtube', status: 'uploaded' });
+    expect(history.slice(1).map((e) => [e.platform, e.status])).toEqual([
+      ['tiktok', 'failed'],
+      ['youtube', 'uploaded'],
+      ['instagram', 'uploaded'],
+    ]);
+    expect(history[1]).toEqual(expect.objectContaining({ fileName: 'clip.mp4', errorMessage: 'rate limited', platformPostId: null }));
+    expect(history[2]).toEqual(expect.objectContaining({ platformPostId: 'youtube-post', errorMessage: null }));
+    expect(new Set(history.slice(1).map((e) => e.jobId)).size).toBe(1);
   });
 
   test('a past-due scheduled file is uploaded', async () => {
