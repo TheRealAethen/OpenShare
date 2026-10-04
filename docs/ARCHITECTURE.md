@@ -67,8 +67,10 @@ Key design principles:
   (see `CONTRIBUTING.md` and `AGENTS.md` §2).
 - Registers IPC handlers for profiles, files, quota, settings, secrets, auth,
   and the daily run.
-- Persists configuration and per-profile upload state in an
-  `electron-store` instance (`openshare-config`).
+- Persists global application state (profiles, connected accounts, daily quota,
+  upload history, settings) in an `electron-store` instance (`openshare-config`).
+  Per-video state lives in each profile's `meta.json`. See
+  [ELECTRON_STORE_SCHEMA.md](./ELECTRON_STORE_SCHEMA.md) for the full schema.
 - Stores profile media under `userData/profiles/<profileId>/`.
 
 ### 3.2 Auth (`src/auth.js`)
@@ -151,6 +153,10 @@ in `meta.json` is automatically reset to `pending` (see §3.5).
   }
 }
 ```
+
+> The `electron-store` keys (`profiles`, `quota`, `history`, `settings`) are
+> documented in [ELECTRON_STORE_SCHEMA.md](./ELECTRON_STORE_SCHEMA.md). The
+> sections below describe the same data in context.
 
 ### Upload history (per profile, append-only)
 Stored in `electron-store` under `history.<profileId>` as an array. Each
