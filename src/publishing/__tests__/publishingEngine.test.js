@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const mockState = { files: {}, profileRoot: null };
+const mockState = { files: {}, profileRoot: null, quotaUsed: 0 };
 const mockUploadToPlatform = jest.fn();
 
 jest.mock('../storage', () => {
@@ -21,8 +21,8 @@ jest.mock('../storage', () => {
     getProfiles: () => [profile],
     getProfile: () => profile,
     saveProfiles: () => {},
-    getQuota: () => ({ date: '2026-10-04', used: 0 }),
-    incrementQuota: () => {},
+    getQuota: () => ({ date: '2026-10-04', used: mockState.quotaUsed }),
+    incrementQuota: (_pid, count) => { mockState.quotaUsed += count; },
     listFiles: () => Object.entries(mockState.files).map(([name, f]) => ({
       name,
       path: '/videos/' + name,
@@ -53,6 +53,7 @@ const PLATFORMS = ['tiktok', 'youtube', 'instagram'];
 
 beforeEach(() => {
   mockState.files = { 'clip.mp4': { status: 'pending' } };
+  mockState.quotaUsed = 0;
   mockUploadToPlatform.mockReset();
   mockUploadToPlatform.mockImplementation(async (platform) => ({ id: platform + '-id' }));
   jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -122,7 +123,10 @@ describe('idempotent upload status', () => {
     const platformResults = { tiktok: { ok: true, id: 'tt' }, youtube: { ok: false, error: 'x' } };
     fs.writeFileSync(
       path.join(mockState.profileRoot, 'meta.json'),
-      JSON.stringify({ 'clip.mp4': { status: 'failed', platformResults, failureReason: 'youtube: x' } })
+      JSON.stringify({
+        'clip.mp4': { status: 'uploading', platformResults },
+        'failed.mp4': { status: 'failed', platformResults, failureReason: 'youtube: x' },
+      })
     );
 
     engine.resetStaleUploadingStates();
@@ -130,6 +134,40 @@ describe('idempotent upload status', () => {
     const meta = JSON.parse(fs.readFileSync(path.join(mockState.profileRoot, 'meta.json'), 'utf8'));
     expect(meta['clip.mp4'].status).toBe('pending');
     expect(meta['clip.mp4'].platformResults).toEqual(platformResults);
+    expect(meta['failed.mp4'].status).toBe('failed');
     fs.rmSync(mockState.profileRoot, { recursive: true, force: true });
+  });
+
+  test('a past-due scheduled file is uploaded', async () => {
+    mockState.files = { 'clip.mp4': { status: 'pending', scheduledAt: new Date(Date.now() - 60000).toISOString() } };
+
+    await engine.runDailyForProfile('p1');
+
+    expect(mockUploadToPlatform).toHaveBeenCalledTimes(PLATFORMS.length);
+  });
+
+  test('a future scheduled file is not uploaded', async () => {
+    mockState.files = { 'clip.mp4': { status: 'pending', scheduledAt: new Date(Date.now() + 3600000).toISOString() } };
+
+    const result = await engine.runDailyForProfile('p1');
+
+    expect(mockUploadToPlatform).not.toHaveBeenCalled();
+    expect(result.uploaded).toBe(0);
+    expect(mockState.files['clip.mp4'].status).toBe('pending');
+  });
+
+  test('uploads stop at the daily quota and the rest stay pending', async () => {
+    mockState.quotaUsed = 29;
+    mockState.files = {
+      'a.mp4': { status: 'pending' },
+      'b.mp4': { status: 'pending' },
+    };
+
+    await engine.runDailyForProfile('p1');
+
+    expect(mockUploadToPlatform).toHaveBeenCalledTimes(PLATFORMS.length);
+    expect(mockState.files['a.mp4'].status).toBe('uploaded');
+    expect(mockState.files['b.mp4'].status).toBe('pending');
+    expect(mockState.quotaUsed).toBe(30);
   });
 });
