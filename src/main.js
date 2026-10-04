@@ -188,12 +188,18 @@ ipcMain.handle('set-file-kids', (_e, { profileId, fileName, madeForKids }) => {
   setFileMeta(profileId, fileName, { madeForKids });
   return listFiles(profileId);
 });
+function requeueFile(profileId, fileName) {
+  const file = listFiles(profileId).find((f) => f.name === fileName);
+  if (file && file.status !== 'uploaded') {
+    setFileMeta(profileId, fileName, { status: 'pending', uploadedAt: null, lastError: null, failureReason: '' });
+  }
+}
 ipcMain.handle('reset-file', (_e, { profileId, fileName }) => {
-  setFileMeta(profileId, fileName, { status: 'pending', uploadedAt: null, lastError: null, failureReason: '', platformResults: null });
+  requeueFile(profileId, fileName);
   return listFiles(profileId);
 });
 ipcMain.handle('retry-file', async (_e, { profileId, fileName }) => {
-  setFileMeta(profileId, fileName, { status: 'pending', uploadedAt: null, lastError: null, failureReason: '', platformResults: null });
+  requeueFile(profileId, fileName);
   worker.enqueue(() => engine.runDailyForProfile(profileId, (data) => sendToRenderer('upload-progress', data)));
   return { enqueued: true };
 });
