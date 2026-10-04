@@ -19,6 +19,8 @@ try { uploadToPlatform = require('../uploader').uploadToPlatform; } catch (e) { 
 let _worker = null;
 let _notifyProgress = null;
 let _schedulerTimer = null;
+const _activeProfiles = new Set();
+const _activeFiles = new Set();
 
 const PROGRESS_THROTTLE_MS = 250;
 
@@ -133,7 +135,6 @@ function resetStaleUploadingStates() {
         meta[fileName].uploadedAt = null;
         meta[fileName].lastError = null;
         meta[fileName].failureReason = '';
-        meta[fileName].platformResults = null;
         changed = true;
         totalReset++;
       }
@@ -150,6 +151,19 @@ function resetStaleUploadingStates() {
 }
 
 async function runDailyForProfile(profileId, notifyProgress) {
+  if (_activeProfiles.has(profileId)) {
+    console.log('[TELEMETRY] profile=' + profileId + ' run already in progress — skipping');
+    return { done: true, reason: 'already-running', uploaded: 0 };
+  }
+  _activeProfiles.add(profileId);
+  try {
+    return await runProfileUpload(profileId, notifyProgress);
+  } finally {
+    _activeProfiles.delete(profileId);
+  }
+}
+
+async function runProfileUpload(profileId, notifyProgress) {
   const raw = notifyProgress || (() => {});
   const sendProgress = createThrottledSender(raw);
   const emitLog = (level, message) => sendProgress({ type: 'log:append', level, message, timestamp: Date.now() });
@@ -177,7 +191,7 @@ async function runDailyForProfile(profileId, notifyProgress) {
   let staleCount = 0;
   for (const f of all) {
     if (f.status === 'failed') {
-      setFileMeta(profileId, f.name, { status: 'pending', uploadedAt: null, lastError: null, platformResults: null });
+      setFileMeta(profileId, f.name, { status: 'pending', uploadedAt: null, lastError: null });
       staleCount++;
     }
   }
@@ -237,14 +251,27 @@ async function runDailyForProfile(profileId, notifyProgress) {
 
   for (let i = 0; i < due.length; i++) {
     const file = due[i];
-    const lockKey = 'uploading:' + profileId + ':' + file.name;
-    if (_worker) _worker.setRuntimeState(lockKey, true);
+    const fileKey = profileId + ':' + file.name;
+    if (_activeFiles.has(fileKey)) {
+      console.log('[TELEMETRY] profile=' + profileId + ' file=' + JSON.stringify(file.name) + ' already in flight — skipping');
+      continue;
+    }
+    const current = listFiles(profileId).find((f) => f.name === file.name);
+    if (!current || current.status !== 'pending') {
+      console.log('[TELEMETRY] profile=' + profileId + ' file=' + JSON.stringify(file.name) + ' no longer pending (status=' + (current && current.status) + ') — skipping');
+      continue;
+    }
+    _activeFiles.add(fileKey);
     try {
-      const targetPlatforms = (file.platforms && file.platforms.length) ? file.platforms : PLATFORMS;
+      const targetPlatforms = (current.platforms && current.platforms.length) ? current.platforms : PLATFORMS;
       console.log('[TELEMETRY] profile=' + profileId + ' processing file=' + JSON.stringify(file.name) + ' targetPlatforms=' + JSON.stringify(targetPlatforms) + ' hasYouTube=' + targetPlatforms.includes('youtube'));
-      const perPlatform = {};
+      const perPlatform = Object.assign({}, current.platformResults || {});
       for (let p = 0; p < targetPlatforms.length; p++) {
         const platform = targetPlatforms[p];
+        if (perPlatform[platform] && perPlatform[platform].ok) {
+          console.log('[TELEMETRY] profile=' + profileId + ' file=' + JSON.stringify(file.name) + ' platform=' + platform + ' already published — skipping');
+          continue;
+        }
         sendProgress({ type: 'upload:platform-start', profileId, fileName: file.name, platform, index: p, total: targetPlatforms.length });
         try {
           const profile = getProfile(profileId);
@@ -282,6 +309,7 @@ async function runDailyForProfile(profileId, notifyProgress) {
             }
           }
           perPlatform[platform] = { ok: true, id: res.id };
+          setFileMeta(profileId, file.name, { platformResults: perPlatform });
           sendProgress({ type: 'upload:platform-done', profileId, fileName: file.name, platform, ok: true, id: res.id });
           emitLog('ok', '\'' + file.name + '\' uploaded to ' + platform + ' (id=' + res.id + ')');
         } catch (err) {
@@ -319,7 +347,7 @@ async function runDailyForProfile(profileId, notifyProgress) {
         emitLog('error', '\'' + file.name + '\' upload failed: ' + failureReason);
       }
     } finally {
-      if (_worker) _worker.deleteRuntimeState(lockKey);
+      _activeFiles.delete(fileKey);
     }
   }
 

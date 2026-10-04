@@ -170,13 +170,19 @@ in `meta.json` is automatically reset to `pending` (see §3.5).
    the Worker's in-memory `_runtimeState` — it is **not** persisted to
    `meta.json`. Only terminal states (`uploaded`, `failed`) are written to
    `meta.json`.
-8. Mark file `uploaded` only if **all** selected platforms succeeded,
-   otherwise `failed` with error detail. The runtime state is then removed
-   from worker memory.
+8. Each platform's result is written to `platformResults` in `meta.json` as
+   soon as its upload succeeds, so a rerun never re-publishes that platform.
+   When all selected platforms have succeeded the file is marked `uploaded`;
+   otherwise it is `failed` with error detail. Failed files are retried on the
+   next run, and only platforms without an `ok` result are uploaded again.
 9. Increment quota by number of fully uploaded files.
 10. Emit progress events (`start`, `status`, `file`, `overall`) to the renderer.
 11. **Idempotency:** a re-run never re-publishes a file already `uploaded`
-    (resumable; see NFR-004 in `PRD.md`).
+    (resumable; see NFR-004 in `PRD.md`). Each file's status is re-read from
+    `meta.json` immediately before its upload, and a profile or file already
+    in flight in this process is skipped, so overlapping runs (scheduler tick,
+    repeated "Run Daily Upload" clicks) cannot publish the same file twice.
+    `reset-file` and `retry-file` never move an `uploaded` file back to `pending`.
 
 ## 6. Security Design
 
