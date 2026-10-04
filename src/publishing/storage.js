@@ -105,6 +105,20 @@ function setFileMeta(profileId, fileName, patch) {
   console.timeEnd(tag + ' → total');
 }
 
+function appendHistory(profileId, entries) {
+  const key = `history.${profileId}`;
+  const existing = store.get(key, []);
+  store.set(key, existing.concat(entries));
+}
+
+function getHistory(profileId, options = {}) {
+  const { platform, status, offset = 0, limit = 50 } = options;
+  const matching = store.get(`history.${profileId}`, [])
+    .filter((e) => (!platform || e.platform === platform) && (!status || e.status === status))
+    .reverse();
+  return { items: matching.slice(offset, offset + limit), total: matching.length };
+}
+
 module.exports = {
   store,
   DAILY_LIMIT,
@@ -119,4 +133,6 @@ module.exports = {
   incrementQuota,
   listFiles,
   setFileMeta,
+  appendHistory,
+  getHistory,
 };
