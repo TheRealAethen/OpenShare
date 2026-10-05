@@ -98,6 +98,18 @@ function startServer() {
   });
 }
 
+function buildAuthorizeUrl(platform, cfg, state) {
+  const def = CLIENTS[platform];
+  const authUrl = new URL(def.authUrl);
+  authUrl.searchParams.set('client_id', cfg.clientId);
+  authUrl.searchParams.set('redirect_uri', REDIRECT_URI);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('scope', def.scope);
+  authUrl.searchParams.set('state', state);
+  if (platform === 'youtube') authUrl.searchParams.set('prompt', 'consent');
+  return authUrl.toString();
+}
+
 async function authenticate(platform, _win) {
   const secrets = loadSecrets();
   const cfg = secrets[platform];
@@ -108,16 +120,7 @@ async function authenticate(platform, _win) {
 
   const server = startServer();
   const state = Math.random().toString(36).slice(2);
-  const authUrl = new URL(def.authUrl);
-  authUrl.searchParams.set('client_id', cfg.clientId);
-  authUrl.searchParams.set('redirect_uri', REDIRECT_URI);
-  authUrl.searchParams.set('response_type', 'code');
-  authUrl.searchParams.set('scope', def.scope);
-  authUrl.searchParams.set('state', state);
-  if (platform === 'youtube') authUrl.searchParams.set('prompt', 'consent');
-  if (platform === 'instagram') authUrl.searchParams.set('client_secret', cfg.clientSecret);
-
-  shell.openExternal(authUrl.toString());
+  shell.openExternal(buildAuthorizeUrl(platform, cfg, state));
   const params = await server;
 
   if (params.state !== state) throw new Error('OAuth state mismatch');
@@ -141,4 +144,4 @@ async function authenticate(platform, _win) {
   return tokens;
 }
 
-module.exports = { authenticate, REDIRECT_URI, CLIENTS, loadSecrets, saveSecrets };
+module.exports = { authenticate, buildAuthorizeUrl, REDIRECT_URI, CLIENTS, loadSecrets, saveSecrets };
