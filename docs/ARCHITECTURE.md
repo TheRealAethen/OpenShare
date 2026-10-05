@@ -76,6 +76,9 @@ Key design principles:
 ### 3.2 Auth (`src/auth.js`)
 - Implements OAuth 2.0 authorization-code flows for each platform.
 - Spawns a local HTTP server on `localhost:18923` to receive the redirect.
+  Instagram cannot use `localhost` (Meta requires HTTPS), so its redirect goes
+  to the public `docs/callback.html` page, which forwards the result to
+  `openshare://`. See [GITHUB_PAGES.md](./GITHUB_PAGES.md).
 - Validates the `state` parameter to mitigate CSRF.
 - Instagram uses Instagram Login: the short-lived token is form-encoded from
   `api.instagram.com`, exchanged for a long-lived token on `graph.instagram.com`,

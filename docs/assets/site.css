@@ -1,0 +1,111 @@
+:root {
+  --bg: #fafaf9;
+  --surface: #ffffff;
+  --text: #1c1c1e;
+  --muted: #5b5b61;
+  --accent: #2d6cdf;
+  --accent-ink: #ffffff;
+  --line: #e4e4e7;
+  --radius: 10px;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111114;
+    --surface: #1b1b20;
+    --text: #f2f2f4;
+    --muted: #a1a1aa;
+    --accent: #6a9cff;
+    --accent-ink: #0b0b0d;
+    --line: #2c2c33;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #111114;
+  --surface: #1b1b20;
+  --text: #f2f2f4;
+  --muted: #a1a1aa;
+  --accent: #6a9cff;
+  --accent-ink: #0b0b0d;
+  --line: #2c2c33;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+a { color: var(--accent); }
+
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 20px 16px;
+}
+.top .brand { font-weight: 700; color: var(--text); text-decoration: none; }
+.top nav { display: flex; gap: 18px; flex-wrap: wrap; }
+.top nav a { color: var(--muted); text-decoration: none; }
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+.hero { padding: 48px 0 32px; }
+.hero h1 { font-size: clamp(28px, 5vw, 44px); line-height: 1.15; margin: 0 0 16px; }
+.lede { font-size: 18px; color: var(--muted); max-width: 640px; margin: 0 0 24px; }
+
+.cta {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--accent-ink);
+  padding: 12px 22px;
+  border-radius: var(--radius);
+  font-weight: 600;
+  text-decoration: none;
+}
+.fine { color: var(--muted); font-size: 14px; margin-top: 12px; }
+
+section { padding: 24px 0; }
+h2 { font-size: 24px; margin: 0 0 16px; }
+h3 { font-size: 17px; margin: 0 0 6px; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+.grid article {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px;
+}
+.grid p { margin: 0; color: var(--muted); }
+
+.privacy ul { padding-left: 20px; margin: 0; }
+.privacy li { margin: 6px 0; }
+
+footer {
+  max-width: 960px;
+  margin: 40px auto 0;
+  padding: 24px 16px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 14px;
+}
+
+body.callback main { padding-top: 64px; text-align: center; max-width: 520px; }
+.hidden { display: none; }
