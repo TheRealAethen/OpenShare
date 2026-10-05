@@ -20,9 +20,55 @@ const CLIENTS = {
   instagram: {
     authUrl: 'https://www.instagram.com/oauth/authorize',
     tokenUrl: 'https://api.instagram.com/oauth/access_token',
-    scope: 'instagram_content_publish',
+    scope: 'instagram_business_basic,instagram_business_content_publish',
   },
 };
+
+const INSTAGRAM_PROFESSIONAL_ACCOUNT_TYPES = ['BUSINESS', 'MEDIA_CREATOR'];
+
+async function instagramJson(res) {
+  const json = await res.json();
+  if (!res.ok || json.error_type || json.error) {
+    throw new Error(json.error_message || (json.error && json.error.message) || 'Instagram request failed');
+  }
+  return json;
+}
+
+async function exchangeInstagramCode(cfg, code) {
+  const shortRes = await fetch(CLIENTS.instagram.tokenUrl, {
+    method: 'POST',
+    body: new URLSearchParams({
+      client_id: cfg.clientId,
+      client_secret: cfg.clientSecret,
+      grant_type: 'authorization_code',
+      redirect_uri: REDIRECT_URI,
+      code,
+    }),
+  });
+  const short = (await instagramJson(shortRes)).data?.[0];
+  if (!short || !short.access_token) throw new Error('Instagram did not return an access token.');
+
+  const longUrl = new URL('https://graph.instagram.com/access_token');
+  longUrl.searchParams.set('grant_type', 'ig_exchange_token');
+  longUrl.searchParams.set('client_secret', cfg.clientSecret);
+  longUrl.searchParams.set('access_token', short.access_token);
+  const long = await instagramJson(await fetch(longUrl.toString()));
+
+  const meRes = await fetch('https://graph.instagram.com/me?fields=user_id,username,account_type', {
+    headers: { Authorization: `Bearer ${long.access_token}` },
+  });
+  const me = await instagramJson(meRes);
+  if (!INSTAGRAM_PROFESSIONAL_ACCOUNT_TYPES.includes(me.account_type)) {
+    throw new Error(`Instagram account "${me.username || ''}" is not a professional account. Switch it to a Business or Creator account in the Instagram app and try again.`);
+  }
+
+  return {
+    access_token: long.access_token,
+    user_id: String(me.user_id || short.user_id),
+    account_type: me.account_type,
+    expires_at: new Date(Date.now() + long.expires_in * 1000).toISOString(),
+  };
+}
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -126,6 +172,8 @@ async function authenticate(platform, _win) {
   if (params.state !== state) throw new Error('OAuth state mismatch');
   if (params.error) throw new Error(params.error);
 
+  if (platform === 'instagram') return exchangeInstagramCode(cfg, params.code);
+
   const tokenBody = {
     client_id: cfg.clientId,
     client_secret: cfg.clientSecret,
@@ -144,4 +192,4 @@ async function authenticate(platform, _win) {
   return tokens;
 }
 
-module.exports = { authenticate, buildAuthorizeUrl, REDIRECT_URI, CLIENTS, loadSecrets, saveSecrets };
+module.exports = { authenticate, buildAuthorizeUrl, exchangeInstagramCode, REDIRECT_URI, CLIENTS, loadSecrets, saveSecrets };

@@ -77,6 +77,11 @@ Key design principles:
 - Implements OAuth 2.0 authorization-code flows for each platform.
 - Spawns a local HTTP server on `localhost:18923` to receive the redirect.
 - Validates the `state` parameter to mitigate CSRF.
+- Instagram uses Instagram Login: the short-lived token is form-encoded from
+  `api.instagram.com`, exchanged for a long-lived token on `graph.instagram.com`,
+  and the account is looked up with `/me`. Only Business and Creator accounts
+  are accepted. The stored auth object holds `access_token`, `user_id`,
+  `account_type` and `expires_at`. Refresh is not implemented yet.
 - Exchanges the authorization code for access/refresh tokens.
 - Secrets are loaded from / saved to `src/secrets.json` (git-ignored).
 

@@ -19,15 +19,34 @@ fs.writeFileSync(
   JSON.stringify({ instagram: { clientId: 'ig-client-id', clientSecret: SECRET } })
 );
 
-const { authenticate, buildAuthorizeUrl, CLIENTS } = require('../auth');
+const { authenticate, buildAuthorizeUrl, exchangeInstagramCode, CLIENTS } = require('../auth');
 
 const cfg = { clientId: 'ig-client-id', clientSecret: SECRET };
 
+function fakeResponse(body, ok = true) {
+  return Promise.resolve({ ok, json: async () => body });
+}
+
+function routeIgFetch({ me = { user_id: '42', username: 'brand', account_type: 'BUSINESS' } } = {}) {
+  mockFetch.mockImplementation((url) => {
+    const u = String(url);
+    if (u.startsWith('https://api.instagram.com/oauth/access_token')) {
+      return fakeResponse({ data: [{ access_token: 'short-token', user_id: '42', permissions: 'x' }] });
+    }
+    if (u.startsWith('https://graph.instagram.com/access_token')) {
+      return fakeResponse({ access_token: 'long-token', token_type: 'bearer', expires_in: 5183944 });
+    }
+    if (u.startsWith('https://graph.instagram.com/me')) return fakeResponse(me);
+    return fakeResponse({ error: 'unexpected url ' + u }, false);
+  });
+}
+
 describe('buildAuthorizeUrl', () => {
-  test('instagram URL never contains the client secret', () => {
+  test('instagram URL requests the current scopes and never contains the client secret', () => {
     const url = buildAuthorizeUrl('instagram', cfg, 'state-1');
     const parsed = new URL(url);
 
+    expect(parsed.searchParams.get('scope')).toBe('instagram_business_basic,instagram_business_content_publish');
     expect(parsed.searchParams.has('client_secret')).toBe(false);
     expect(url).not.toContain(SECRET);
     expect(parsed.searchParams.get('client_id')).toBe('ig-client-id');
@@ -35,17 +54,11 @@ describe('buildAuthorizeUrl', () => {
   });
 
   test('building the URL does not log anything', () => {
-    const log = jest.spyOn(console, 'log').mockImplementation(() => {});
-    const info = jest.spyOn(console, 'info').mockImplementation(() => {});
-    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    const error = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const spies = ['log', 'info', 'warn', 'error'].map((m) => jest.spyOn(console, m).mockImplementation(() => {}));
 
     buildAuthorizeUrl('instagram', cfg, 'state-2');
 
-    expect(log).not.toHaveBeenCalled();
-    expect(info).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
-    expect(error).not.toHaveBeenCalled();
+    spies.forEach((s) => expect(s).not.toHaveBeenCalled());
     jest.restoreAllMocks();
   });
 });
@@ -56,7 +69,7 @@ describe('authenticate (instagram)', () => {
     mockFetch.mockReset();
   });
 
-  test('secret is absent from the browser URL and present only in the token POST body', async () => {
+  test('runs the full login: form-encoded short-lived exchange, long-lived exchange, account lookup', async () => {
     let openedUrl = null;
     mockOpenExternal.mockImplementation((url) => {
       openedUrl = url;
@@ -65,19 +78,49 @@ describe('authenticate (instagram)', () => {
         http.get(`http://localhost:18923/callback?code=auth-code&state=${state}`, (res) => res.resume());
       }, 100);
     });
-    mockFetch.mockResolvedValue({ json: async () => ({ access_token: 'at', user_id: '42' }) });
+    routeIgFetch();
 
     const tokens = await authenticate('instagram');
 
     expect(openedUrl).not.toContain(SECRET);
-    expect(new URL(openedUrl).searchParams.has('client_secret')).toBe(false);
 
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    const [tokenUrl, options] = mockFetch.mock.calls[0];
-    expect(tokenUrl).toBe(CLIENTS.instagram.tokenUrl);
-    expect(options.method).toBe('POST');
-    expect(JSON.parse(options.body).client_secret).toBe(SECRET);
+    const [shortUrl, shortOpts] = mockFetch.mock.calls[0];
+    expect(shortUrl).toBe(CLIENTS.instagram.tokenUrl);
+    expect(shortOpts.method).toBe('POST');
+    expect(shortOpts.body).toBeInstanceOf(URLSearchParams);
+    expect(shortOpts.body.get('client_secret')).toBe(SECRET);
+    expect(shortOpts.body.get('grant_type')).toBe('authorization_code');
+    expect(shortOpts.body.get('code')).toBe('auth-code');
 
-    expect(tokens.access_token).toBe('at');
+    const [longUrl, longOpts] = mockFetch.mock.calls[1];
+    expect(new URL(longUrl).host).toBe('graph.instagram.com');
+    expect(new URL(longUrl).searchParams.get('grant_type')).toBe('ig_exchange_token');
+    expect(new URL(longUrl).searchParams.get('access_token')).toBe('short-token');
+    expect(longOpts).toBeUndefined();
+
+    const [meUrl, meOpts] = mockFetch.mock.calls[2];
+    expect(meUrl).toContain('graph.instagram.com/me');
+    expect(meOpts.headers.Authorization).toBe('Bearer long-token');
+    expect(meUrl).not.toContain('long-token');
+
+    expect(tokens).toEqual({
+      access_token: 'long-token',
+      user_id: '42',
+      account_type: 'BUSINESS',
+      expires_at: expect.any(String),
+    });
+    expect(Date.parse(tokens.expires_at)).toBeGreaterThan(Date.now() + 50 * 86400 * 1000);
+  });
+
+  test('a personal account is rejected with a clear message', async () => {
+    routeIgFetch({ me: { user_id: '42', username: 'me', account_type: 'PERSONAL' } });
+
+    await expect(exchangeInstagramCode(cfg, 'code')).rejects.toThrow(/not a professional account/);
+  });
+
+  test('an Instagram error response surfaces Meta\'s message', async () => {
+    mockFetch.mockImplementation(() => fakeResponse({ error_type: 'OAuthException', error_message: 'Invalid code' }, false));
+
+    await expect(exchangeInstagramCode(cfg, 'bad')).rejects.toThrow('Invalid code');
   });
 });
