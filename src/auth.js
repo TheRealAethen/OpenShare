@@ -72,6 +72,7 @@ async function exchangeInstagramCode(cfg, code) {
 
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 
 function secretsPath() {
   if (app.isPackaged) {
@@ -94,6 +95,27 @@ function saveSecrets(secrets) {
   fs.writeFileSync(secretsPath(), JSON.stringify(secrets, null, 2));
 }
 
+const STATE_TTL_MS = 10 * 60 * 1000;
+const pendingStates = new Map();
+
+function createState(platform, now = Date.now()) {
+  for (const [key, entry] of pendingStates) {
+    if (entry.expiresAt <= now) pendingStates.delete(key);
+  }
+  const state = crypto.randomBytes(32).toString('hex');
+  pendingStates.set(state, { platform, expiresAt: now + STATE_TTL_MS });
+  return state;
+}
+
+function consumeState(state, platform, now = Date.now()) {
+  if (!state) throw new Error('OAuth state missing');
+  const entry = pendingStates.get(state);
+  pendingStates.delete(state);
+  if (!entry || entry.platform !== platform) throw new Error('OAuth state invalid');
+  if (entry.expiresAt <= now) throw new Error('OAuth state expired');
+  return true;
+}
+
 let activeServer = null;
 
 function killExistingServer() {
@@ -104,7 +126,7 @@ function killExistingServer() {
   });
 }
 
-function startServer() {
+function startServer(platform) {
   return new Promise((resolve, reject) => {
     (async () => {
       await killExistingServer();
@@ -112,11 +134,18 @@ function startServer() {
       const server = http.createServer((req, res) => {
         const url = new URL(req.url, `http://localhost:${REDIRECT_PORT}`);
         if (url.pathname === '/callback') {
+          const params = Object.fromEntries(url.searchParams.entries());
+          try {
+            consumeState(params.state, platform);
+          } catch {
+            res.statusCode = 400;
+            res.end('<html><body>This sign-in link is no longer valid. Start the sign-in again from OpenShare.</body></html>');
+            return;
+          }
           res.end('<html><body>Authentication complete. You may close this window.</body></html>');
-          const params = url.searchParams;
           activeServer = null;
           server.close();
-          resolve(Object.fromEntries(params.entries()));
+          resolve(params);
         }
       });
 
@@ -164,12 +193,11 @@ async function authenticate(platform, _win) {
     throw new Error(`Missing clientId for ${platform}. Add it to secrets.json (${secretsPath()})`);
   }
 
-  const server = startServer();
-  const state = Math.random().toString(36).slice(2);
+  const state = createState(platform);
+  const server = startServer(platform);
   shell.openExternal(buildAuthorizeUrl(platform, cfg, state));
   const params = await server;
 
-  if (params.state !== state) throw new Error('OAuth state mismatch');
   if (params.error) throw new Error(params.error);
 
   if (platform === 'instagram') return exchangeInstagramCode(cfg, params.code);
@@ -192,4 +220,15 @@ async function authenticate(platform, _win) {
   return tokens;
 }
 
-module.exports = { authenticate, buildAuthorizeUrl, exchangeInstagramCode, REDIRECT_URI, CLIENTS, loadSecrets, saveSecrets };
+module.exports = {
+  authenticate,
+  buildAuthorizeUrl,
+  exchangeInstagramCode,
+  createState,
+  consumeState,
+  STATE_TTL_MS,
+  REDIRECT_URI,
+  CLIENTS,
+  loadSecrets,
+  saveSecrets,
+};

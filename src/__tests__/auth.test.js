@@ -19,7 +19,63 @@ fs.writeFileSync(
   JSON.stringify({ instagram: { clientId: 'ig-client-id', clientSecret: SECRET } })
 );
 
-const { authenticate, buildAuthorizeUrl, exchangeInstagramCode, CLIENTS } = require('../auth');
+const {
+  authenticate,
+  buildAuthorizeUrl,
+  exchangeInstagramCode,
+  createState,
+  consumeState,
+  STATE_TTL_MS,
+  CLIENTS,
+} = require('../auth');
+
+describe('OAuth state', () => {
+  test('createState returns 64 hex characters from a fresh random source', () => {
+    const a = createState('youtube');
+    const b = createState('youtube');
+
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(b).toMatch(/^[0-9a-f]{64}$/);
+    expect(a).not.toBe(b);
+  });
+
+  test('a valid state is accepted once', () => {
+    const state = createState('youtube');
+
+    expect(consumeState(state, 'youtube')).toBe(true);
+    expect(() => consumeState(state, 'youtube')).toThrow('OAuth state invalid');
+  });
+
+  test('an unknown state is rejected', () => {
+    expect(() => consumeState('f'.repeat(64), 'youtube')).toThrow('OAuth state invalid');
+  });
+
+  test('a missing state is rejected', () => {
+    expect(() => consumeState(undefined, 'youtube')).toThrow('OAuth state missing');
+    expect(() => consumeState('', 'youtube')).toThrow('OAuth state missing');
+  });
+
+  test('a state issued for one platform cannot complete another', () => {
+    const state = createState('youtube');
+
+    expect(() => consumeState(state, 'instagram')).toThrow('OAuth state invalid');
+    expect(() => consumeState(state, 'youtube')).toThrow('OAuth state invalid');
+  });
+
+  test('an expired state is rejected', () => {
+    const issuedAt = 1_000_000;
+    const state = createState('tiktok', issuedAt);
+
+    expect(() => consumeState(state, 'tiktok', issuedAt + STATE_TTL_MS)).toThrow('OAuth state expired');
+  });
+
+  test('a state is still valid just before its TTL', () => {
+    const issuedAt = 1_000_000;
+    const state = createState('tiktok', issuedAt);
+
+    expect(consumeState(state, 'tiktok', issuedAt + STATE_TTL_MS - 1)).toBe(true);
+  });
+});
 
 const cfg = { clientId: 'ig-client-id', clientSecret: SECRET };
 
@@ -122,5 +178,28 @@ describe('authenticate (instagram)', () => {
     mockFetch.mockImplementation(() => fakeResponse({ error_type: 'OAuthException', error_message: 'Invalid code' }, false));
 
     await expect(exchangeInstagramCode(cfg, 'bad')).rejects.toThrow('Invalid code');
+  });
+
+  test('a stray callback with a wrong state gets a 400 and does not end the login', async () => {
+    let strayStatus = null;
+    mockOpenExternal.mockImplementation((url) => {
+      const state = new URL(url).searchParams.get('state');
+      setTimeout(() => {
+        http.get('http://localhost:18923/callback?code=forged&state=wrong', (strayRes) => {
+          strayStatus = strayRes.statusCode;
+          strayRes.resume();
+          http.get(`http://localhost:18923/callback?code=auth-code&state=${state}`, (res) => res.resume());
+        });
+      }, 100);
+    });
+    routeIgFetch();
+
+    const tokens = await authenticate('instagram');
+
+    expect(strayStatus).toBe(400);
+    expect(tokens.access_token).toBe('long-token');
+    const shortTokenCalls = mockFetch.mock.calls.filter(([u]) => String(u).startsWith('https://api.instagram.com'));
+    expect(shortTokenCalls).toHaveLength(1);
+    expect(shortTokenCalls[0][1].body.get('code')).toBe('auth-code');
   });
 });
