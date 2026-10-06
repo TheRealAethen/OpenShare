@@ -74,7 +74,9 @@ See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for the full design and
    Settings → Connect Platforms dialog).
 4. Set each OAuth app's redirect URI to `http://localhost:18923/callback`.
    Instagram requires HTTPS, so use `https://theRealAethen.github.io/OpenShare/callback`
-   for it (see [GitHub Pages setup](./docs/GITHUB_PAGES.md)).
+   for it (see [GitHub Pages setup](./docs/GITHUB_PAGES.md)). Instagram sign-in
+   returns to OpenShare through the `openshare://` link, so run OpenShare once
+   before signing in so Windows registers that link.
 
 > ⚠️ Never commit real credentials. `src/secrets.json` is git-ignored.
 

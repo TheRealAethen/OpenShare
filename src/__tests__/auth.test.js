@@ -1,7 +1,6 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const http = require('node:http');
 
 const mockUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'openshare-auth-test-'));
 const mockOpenExternal = jest.fn();
@@ -25,9 +24,31 @@ const {
   exchangeInstagramCode,
   createState,
   consumeState,
+  deliverProtocolCallback,
+  redirectUriFor,
   STATE_TTL_MS,
   CLIENTS,
 } = require('../auth');
+
+const INSTAGRAM_BRIDGE = 'https://theRealAethen.github.io/OpenShare/callback';
+
+describe('redirect URIs', () => {
+  test('instagram uses the HTTPS bridge page, other platforms keep localhost', () => {
+    expect(redirectUriFor('instagram')).toBe(INSTAGRAM_BRIDGE);
+    expect(redirectUriFor('youtube')).toBe('http://localhost:18923/callback');
+    expect(redirectUriFor('tiktok')).toBe('http://localhost:18923/callback');
+  });
+
+  test('the authorize URL carries the bridge URI for instagram', () => {
+    const url = new URL(buildAuthorizeUrl('instagram', { clientId: 'c', clientSecret: 's' }, 'st'));
+
+    expect(url.searchParams.get('redirect_uri')).toBe(INSTAGRAM_BRIDGE);
+  });
+
+  test('deliverProtocolCallback is refused when no login is pending', () => {
+    expect(deliverProtocolCallback('openshare://callback?code=x&state=y')).toBe(false);
+  });
+});
 
 describe('OAuth state', () => {
   test('createState returns 64 hex characters from a fresh random source', () => {
@@ -131,14 +152,15 @@ describe('authenticate (instagram)', () => {
       openedUrl = url;
       const state = new URL(url).searchParams.get('state');
       setTimeout(() => {
-        http.get(`http://localhost:18923/callback?code=auth-code&state=${state}`, (res) => res.resume());
-      }, 100);
+        deliverProtocolCallback(`openshare://callback?code=auth-code&state=${state}`);
+      }, 10);
     });
     routeIgFetch();
 
     const tokens = await authenticate('instagram');
 
     expect(openedUrl).not.toContain(SECRET);
+    expect(new URL(openedUrl).searchParams.get('redirect_uri')).toBe(INSTAGRAM_BRIDGE);
 
     const [shortUrl, shortOpts] = mockFetch.mock.calls[0];
     expect(shortUrl).toBe(CLIENTS.instagram.tokenUrl);
@@ -147,6 +169,7 @@ describe('authenticate (instagram)', () => {
     expect(shortOpts.body.get('client_secret')).toBe(SECRET);
     expect(shortOpts.body.get('grant_type')).toBe('authorization_code');
     expect(shortOpts.body.get('code')).toBe('auth-code');
+    expect(shortOpts.body.get('redirect_uri')).toBe(INSTAGRAM_BRIDGE);
 
     const [longUrl, longOpts] = mockFetch.mock.calls[1];
     expect(new URL(longUrl).host).toBe('graph.instagram.com');
@@ -180,23 +203,23 @@ describe('authenticate (instagram)', () => {
     await expect(exchangeInstagramCode(cfg, 'bad')).rejects.toThrow('Invalid code');
   });
 
-  test('a stray callback with a wrong state gets a 400 and does not end the login', async () => {
-    let strayStatus = null;
+  test('stray or malformed links are ignored and the real link still completes the login', async () => {
+    const results = {};
     mockOpenExternal.mockImplementation((url) => {
       const state = new URL(url).searchParams.get('state');
       setTimeout(() => {
-        http.get('http://localhost:18923/callback?code=forged&state=wrong', (strayRes) => {
-          strayStatus = strayRes.statusCode;
-          strayRes.resume();
-          http.get(`http://localhost:18923/callback?code=auth-code&state=${state}`, (res) => res.resume());
-        });
-      }, 100);
+        results.noState = deliverProtocolCallback('openshare://callback?code=forged');
+        results.wrongState = deliverProtocolCallback('openshare://callback?code=forged&state=wrong');
+        results.wrongScheme = deliverProtocolCallback(`https://callback?code=forged&state=${state}`);
+        results.wrongHost = deliverProtocolCallback(`openshare://other?code=forged&state=${state}`);
+        results.real = deliverProtocolCallback(`openshare://callback?code=auth-code&state=${state}`);
+      }, 10);
     });
     routeIgFetch();
 
     const tokens = await authenticate('instagram');
 
-    expect(strayStatus).toBe(400);
+    expect(results).toEqual({ noState: false, wrongState: false, wrongScheme: false, wrongHost: false, real: true });
     expect(tokens.access_token).toBe('long-token');
     const shortTokenCalls = mockFetch.mock.calls.filter(([u]) => String(u).startsWith('https://api.instagram.com'));
     expect(shortTokenCalls).toHaveLength(1);

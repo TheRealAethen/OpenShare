@@ -5,6 +5,11 @@ const { URL } = require('node:url');
 
 const REDIRECT_PORT = 18923;
 const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}/callback`;
+const INSTAGRAM_REDIRECT_URI = 'https://theRealAethen.github.io/OpenShare/callback';
+
+function redirectUriFor(platform) {
+  return platform === 'instagram' ? INSTAGRAM_REDIRECT_URI : REDIRECT_URI;
+}
 
 const CLIENTS = {
   youtube: {
@@ -41,7 +46,7 @@ async function exchangeInstagramCode(cfg, code) {
       client_id: cfg.clientId,
       client_secret: cfg.clientSecret,
       grant_type: 'authorization_code',
-      redirect_uri: REDIRECT_URI,
+      redirect_uri: redirectUriFor('instagram'),
       code,
     }),
   });
@@ -116,6 +121,44 @@ function consumeState(state, platform, now = Date.now()) {
   return true;
 }
 
+let pendingProtocolCallback = null;
+
+function waitForProtocolCallback(platform) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingProtocolCallback = null;
+      reject(new Error('Auth timed out after 2 minutes. No response was received from the platform.'));
+    }, 120000);
+    pendingProtocolCallback = {
+      platform,
+      settle(params) {
+        clearTimeout(timer);
+        pendingProtocolCallback = null;
+        resolve(params);
+      },
+    };
+  });
+}
+
+function deliverProtocolCallback(rawUrl) {
+  if (!pendingProtocolCallback) return false;
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'openshare:' || url.hostname !== 'callback') return false;
+  const params = Object.fromEntries(url.searchParams.entries());
+  try {
+    consumeState(params.state, pendingProtocolCallback.platform);
+  } catch {
+    return false;
+  }
+  pendingProtocolCallback.settle(params);
+  return true;
+}
+
 let activeServer = null;
 
 function killExistingServer() {
@@ -177,7 +220,7 @@ function buildAuthorizeUrl(platform, cfg, state) {
   const def = CLIENTS[platform];
   const authUrl = new URL(def.authUrl);
   authUrl.searchParams.set('client_id', cfg.clientId);
-  authUrl.searchParams.set('redirect_uri', REDIRECT_URI);
+  authUrl.searchParams.set('redirect_uri', redirectUriFor(platform));
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('scope', def.scope);
   authUrl.searchParams.set('state', state);
@@ -194,9 +237,9 @@ async function authenticate(platform, _win) {
   }
 
   const state = createState(platform);
-  const server = startServer(platform);
+  const callback = platform === 'instagram' ? waitForProtocolCallback(platform) : startServer(platform);
   shell.openExternal(buildAuthorizeUrl(platform, cfg, state));
-  const params = await server;
+  const params = await callback;
 
   if (params.error) throw new Error(params.error);
 
@@ -207,7 +250,7 @@ async function authenticate(platform, _win) {
     client_secret: cfg.clientSecret,
     code: params.code,
     grant_type: 'authorization_code',
-    redirect_uri: REDIRECT_URI,
+    redirect_uri: redirectUriFor(platform),
     access_type: 'offline',
   };
   const tokenRes = await fetch(def.tokenUrl, {
@@ -226,6 +269,8 @@ module.exports = {
   exchangeInstagramCode,
   createState,
   consumeState,
+  deliverProtocolCallback,
+  redirectUriFor,
   STATE_TTL_MS,
   REDIRECT_URI,
   CLIENTS,

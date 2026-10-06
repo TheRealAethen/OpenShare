@@ -22,6 +22,25 @@ function publicProfiles() {
 
 let winRef = null;
 
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, argv) => {
+    if (winRef) {
+      if (winRef.isMinimized()) winRef.restore();
+      winRef.focus();
+    }
+    const link = argv.find((arg) => typeof arg === 'string' && arg.startsWith('openshare://'));
+    if (link) require('./auth').deliverProtocolCallback(link);
+  });
+}
+
+if (app.isPackaged) {
+  app.setAsDefaultProtocolClient('openshare');
+} else {
+  app.setAsDefaultProtocolClient('openshare', process.execPath, [path.resolve(process.argv[1])]);
+}
+
 function sendToRenderer(channel, data) {
   if (winRef && winRef.webContents && !winRef.webContents.isDestroyed()) {
     winRef.webContents.send(channel, data);

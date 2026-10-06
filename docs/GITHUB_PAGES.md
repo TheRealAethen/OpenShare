@@ -35,7 +35,7 @@ Meta rejects `http://` callbacks, so this HTTPS address is the only valid option
 2. `assets/callback.js` keeps only `code`, `state`, `error` and `error_description`, and drops everything else.
 3. It removes the query string from the address bar and browser history.
 4. The page shows a **Return to OpenShare** button. Its link is `openshare://callback?code=...&state=...`.
-5. The app receives the link (see the custom-protocol issue) and checks `state` before using the code.
+5. Windows opens OpenShare with the link. If OpenShare is already running, the running instance receives it. The app checks `state` before using the code.
 
 The button requires a click because browsers block protocol redirects that are not triggered by the user.
 
