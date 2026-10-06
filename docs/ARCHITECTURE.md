@@ -79,7 +79,11 @@ Key design principles:
   Instagram cannot use `localhost` (Meta requires HTTPS), so its redirect goes
   to the public `docs/callback.html` page, which forwards the result to
   `openshare://`. See [GITHUB_PAGES.md](./GITHUB_PAGES.md).
-- Validates the `state` parameter to mitigate CSRF.
+- `state` is 32 random bytes from `crypto.randomBytes`, kept in memory per login
+  attempt with a 10-minute TTL. The callback handler consumes it on its first
+  valid use. A missing, unknown, expired, or other-platform `state` gets a 400
+  and no code is exchanged, but the pending login keeps waiting, so a stray
+  request cannot end it.
 - Instagram uses Instagram Login: the short-lived token is form-encoded from
   `api.instagram.com`, exchanged for a long-lived token on `graph.instagram.com`,
   and the account is looked up with `/me`. Only Business and Creator accounts
