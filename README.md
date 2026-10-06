@@ -73,6 +73,8 @@ See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for the full design and
    `clientSecret` for each platform (you can also enter them in the app's
    Settings → Connect Platforms dialog).
 4. Set each OAuth app's redirect URI to `http://localhost:18923/callback`.
+   Instagram requires HTTPS, so use `https://theRealAethen.github.io/OpenShare/callback`
+   for it (see [GitHub Pages setup](./docs/GITHUB_PAGES.md)).
 
 > ⚠️ Never commit real credentials. `src/secrets.json` is git-ignored.
 
@@ -111,6 +113,7 @@ read `AGENTS.md` (the constitution) before any action.
 - [UML Diagrams](./docs/UML.md)
 - [Build & Release](./docs/BUILD.md)
 - [Contributing & Security](./docs/CONTRIBUTING.md)
+- [GitHub Pages: landing page & OAuth callback](./docs/GITHUB_PAGES.md)
 
 ## Project Structure
 
