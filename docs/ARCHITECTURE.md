@@ -104,7 +104,11 @@ The uploader is the boundary between orchestration and platform specifics.
   - `TikTokAdapter.js` — file init → PUT upload → publish.
   - `YouTubeAdapter.js` — optional ffmpeg transcode to H.264/AAC MP4 → resumable
     `videos.insert` via googleapis; also exposes `getChannel(tokens)`.
-  - `InstagramAdapter.js` — Graph API media creation (REELS) → publish.
+  - `InstagramAdapter.js` — Graph API media creation (REELS) → publish. **Not
+    yet correct:** it calls `graph.facebook.com` (Instagram Login tokens are
+    for `graph.instagram.com`), sends a local file path as `video_url`, and
+    publishes without waiting for processing. See
+    `src/publishing/instagram.js` below; the adapter is not wired to it yet.
 - `uploader.js` builds an `AdapterRegistry` at module load and registers one
   instance per platform. It contains no platform logic.
 - `uploadToPlatform(platform, tokens, filePath, opts)` resolves the adapter with
@@ -117,6 +121,29 @@ The uploader is the boundary between orchestration and platform specifics.
   platform string.
 - Failure classification (transient vs permanent) and retry/backoff live here so
   the daily-run pipeline can decide whether to mark a file `failed` or retry.
+
+#### Instagram publishing (`src/publishing/instagram.js`)
+
+Standalone, independently testable functions for the three Graph API calls
+Instagram's REELS publishing needs, all against `graph.instagram.com` with
+the access token in an `Authorization` header (never a URL or log line):
+
+- `createContainer({ accessToken, igUserId, videoUrl, caption })` —
+  `POST /{igUserId}/media`. Rejects anything that is not an `https://` URL
+  before making a request.
+- `waitForContainerReady({ accessToken, containerId, ... })` — polls
+  `GET /{containerId}?fields=status_code` until `FINISHED`; throws on `ERROR`,
+  `EXPIRED`, or its timeout. `sleep` and `now` are injectable for tests.
+- `publishContainer({ accessToken, igUserId, containerId })` —
+  `POST /{igUserId}/media_publish`.
+- `publishReel(...)` runs the three in order and returns `{ id }`.
+
+**Open dependency — not solved here:** `videoUrl` must already be a public
+HTTPS URL. OpenShare has no mechanism to host a local video file at one.
+`InstagramAdapter.js` is not wired to this module until that hosting approach
+is decided (`AGENTS.md` §2 architectural decision) and tracked in its own
+issue. The Instagram 100-posts-per-24-hours limit is also not reconciled with
+the per-profile file quota in `storage.js` yet.
 
 ### 3.4 Renderer (`src/renderer/*`)
 - Pure presentation + interaction. Talks only via `window.api`.
