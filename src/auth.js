@@ -5,6 +5,11 @@ const { URL } = require('node:url');
 
 const REDIRECT_PORT = 18923;
 const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}/callback`;
+const INSTAGRAM_REDIRECT_URI = 'https://theRealAethen.github.io/OpenShare/callback';
+
+function redirectUriFor(platform) {
+  return platform === 'instagram' ? INSTAGRAM_REDIRECT_URI : REDIRECT_URI;
+}
 
 const CLIENTS = {
   youtube: {
@@ -26,38 +31,73 @@ const CLIENTS = {
 
 const INSTAGRAM_PROFESSIONAL_ACCOUNT_TYPES = ['BUSINESS', 'MEDIA_CREATOR'];
 
-async function instagramJson(res) {
-  const json = await res.json();
-  if (!res.ok || json.error_type || json.error) {
-    throw new Error(json.error_message || (json.error && json.error.message) || 'Instagram request failed');
+function redactSensitive(value) {
+  if (Array.isArray(value)) return value.map(redactSensitive);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [key, v] of Object.entries(value)) {
+      out[key] = /token|secret/i.test(key) ? '[REDACTED]' : redactSensitive(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+// Meta's Instagram Login redirect has been observed appending a trailing
+// `#_` (or `#`) fragment marker directly onto the `code` query value in some
+// app configurations. Anything from the first `#` onward is not part of the
+// code, so it is stripped before use.
+function sanitizeAuthorizationCode(code) {
+  return String(code || '').split('#')[0];
+}
+
+async function instagramRequest(res, context) {
+  const text = await res.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    // leave json null; the raw text is still logged below
+  }
+  if (!res.ok || !json || json.error_type || json.error) {
+    console.error(`[auth] Instagram ${context} failed (status ${res.status}):`, json ? redactSensitive(json) : text);
+    const message = json && (json.error_message || (json.error && json.error.message));
+    throw new Error(message || `Instagram ${context} failed (status ${res.status})`);
   }
   return json;
 }
 
-async function exchangeInstagramCode(cfg, code) {
+async function exchangeInstagramCode(cfg, rawCode) {
+  const code = sanitizeAuthorizationCode(rawCode);
   const shortRes = await fetch(CLIENTS.instagram.tokenUrl, {
     method: 'POST',
     body: new URLSearchParams({
       client_id: cfg.clientId,
       client_secret: cfg.clientSecret,
       grant_type: 'authorization_code',
-      redirect_uri: REDIRECT_URI,
+      redirect_uri: redirectUriFor('instagram'),
       code,
     }),
   });
-  const short = (await instagramJson(shortRes)).data?.[0];
-  if (!short || !short.access_token) throw new Error('Instagram did not return an access token.');
+  const shortJson = await instagramRequest(shortRes, 'short-lived token exchange');
+  // Meta documents the response wrapped in a `data` array, but some app
+  // configurations return the token object directly. Accept both shapes.
+  const short = Array.isArray(shortJson.data) ? shortJson.data[0] : shortJson;
+  if (!short || !short.access_token) {
+    console.error('[auth] Instagram short-lived exchange had no access_token:', redactSensitive(shortJson));
+    throw new Error('Instagram did not return an access token.');
+  }
 
   const longUrl = new URL('https://graph.instagram.com/access_token');
   longUrl.searchParams.set('grant_type', 'ig_exchange_token');
   longUrl.searchParams.set('client_secret', cfg.clientSecret);
   longUrl.searchParams.set('access_token', short.access_token);
-  const long = await instagramJson(await fetch(longUrl.toString()));
+  const long = await instagramRequest(await fetch(longUrl.toString()), 'long-lived token exchange');
 
   const meRes = await fetch('https://graph.instagram.com/me?fields=user_id,username,account_type', {
     headers: { Authorization: `Bearer ${long.access_token}` },
   });
-  const me = await instagramJson(meRes);
+  const me = await instagramRequest(meRes, 'account lookup');
   if (!INSTAGRAM_PROFESSIONAL_ACCOUNT_TYPES.includes(me.account_type)) {
     throw new Error(`Instagram account "${me.username || ''}" is not a professional account. Switch it to a Business or Creator account in the Instagram app and try again.`);
   }
@@ -113,6 +153,44 @@ function consumeState(state, platform, now = Date.now()) {
   pendingStates.delete(state);
   if (!entry || entry.platform !== platform) throw new Error('OAuth state invalid');
   if (entry.expiresAt <= now) throw new Error('OAuth state expired');
+  return true;
+}
+
+let pendingProtocolCallback = null;
+
+function waitForProtocolCallback(platform) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingProtocolCallback = null;
+      reject(new Error('Auth timed out after 2 minutes. No response was received from the platform.'));
+    }, 120000);
+    pendingProtocolCallback = {
+      platform,
+      settle(params) {
+        clearTimeout(timer);
+        pendingProtocolCallback = null;
+        resolve(params);
+      },
+    };
+  });
+}
+
+function deliverProtocolCallback(rawUrl) {
+  if (!pendingProtocolCallback) return false;
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'openshare:' || url.hostname !== 'callback') return false;
+  const params = Object.fromEntries(url.searchParams.entries());
+  try {
+    consumeState(params.state, pendingProtocolCallback.platform);
+  } catch {
+    return false;
+  }
+  pendingProtocolCallback.settle(params);
   return true;
 }
 
@@ -177,7 +255,7 @@ function buildAuthorizeUrl(platform, cfg, state) {
   const def = CLIENTS[platform];
   const authUrl = new URL(def.authUrl);
   authUrl.searchParams.set('client_id', cfg.clientId);
-  authUrl.searchParams.set('redirect_uri', REDIRECT_URI);
+  authUrl.searchParams.set('redirect_uri', redirectUriFor(platform));
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('scope', def.scope);
   authUrl.searchParams.set('state', state);
@@ -194,9 +272,9 @@ async function authenticate(platform, _win) {
   }
 
   const state = createState(platform);
-  const server = startServer(platform);
+  const callback = platform === 'instagram' ? waitForProtocolCallback(platform) : startServer(platform);
   shell.openExternal(buildAuthorizeUrl(platform, cfg, state));
-  const params = await server;
+  const params = await callback;
 
   if (params.error) throw new Error(params.error);
 
@@ -207,7 +285,7 @@ async function authenticate(platform, _win) {
     client_secret: cfg.clientSecret,
     code: params.code,
     grant_type: 'authorization_code',
-    redirect_uri: REDIRECT_URI,
+    redirect_uri: redirectUriFor(platform),
     access_type: 'offline',
   };
   const tokenRes = await fetch(def.tokenUrl, {
@@ -226,6 +304,8 @@ module.exports = {
   exchangeInstagramCode,
   createState,
   consumeState,
+  deliverProtocolCallback,
+  redirectUriFor,
   STATE_TTL_MS,
   REDIRECT_URI,
   CLIENTS,

@@ -75,10 +75,15 @@ Key design principles:
 
 ### 3.2 Auth (`src/auth.js`)
 - Implements OAuth 2.0 authorization-code flows for each platform.
-- Spawns a local HTTP server on `localhost:18923` to receive the redirect.
-  Instagram cannot use `localhost` (Meta requires HTTPS), so its redirect goes
-  to the public `docs/callback.html` page, which forwards the result to
-  `openshare://`. See [GITHUB_PAGES.md](./GITHUB_PAGES.md).
+- TikTok and YouTube: a local HTTP server on `localhost:18923` receives the redirect.
+- Instagram: Meta requires HTTPS, so the redirect goes to the public
+  `docs/callback.html` page, which forwards the result to `openshare://callback`.
+  The app receives the link through its single-instance lock (`second-instance`)
+  and passes it to `deliverProtocolCallback()`, which accepts it only while a
+  login is pending and only when `state` matches. See
+  [GITHUB_PAGES.md](./GITHUB_PAGES.md).
+- The `openshare://` protocol is registered on startup (`setAsDefaultProtocolClient`)
+  and in the packaged installer (`build.protocols` in `package.json`).
 - `state` is 32 random bytes from `crypto.randomBytes`, kept in memory per login
   attempt with a 10-minute TTL. The callback handler consumes it on its first
   valid use. A missing, unknown, expired, or other-platform `state` gets a 400

@@ -23,6 +23,14 @@
   "build": {
     "appId": "com.openshare.app",
     "productName": "OpenShare",
+    "protocols": [
+      {
+        "name": "OpenShare",
+        "schemes": [
+          "openshare"
+        ]
+      }
+    ],
     "directories": {
       "output": "dist"
     },
